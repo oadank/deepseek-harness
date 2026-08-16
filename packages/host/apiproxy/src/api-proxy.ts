@@ -34,6 +34,7 @@ import {
   PresetNotWritableError, resolveSessionPreset, UnknownPresetError,
 } from '@deepseek-ai/dsh-agent-presets'
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {
   ApiProxy, BalanceView, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
@@ -1481,10 +1482,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     broadcast({ type: 'session/queue', sessionId: session.id, items: queueItems(agent, event.data) })
   })
 
-  // [本地改造 2026-08-16] 语音铁律：turn 完成后，若该 turn 用户发过语音且助手有
-  // 文本回复，则把最后一条助手文本合成 TTS、落盘为独立语音消息（voice/reply 事件，
-  // 与用户语音消息同级持久化，前端渲染为单独语音横条）。异步 fire-and-forget，
-  // 不阻塞事件推送；只处理 turn/end，append 的 voice/reply 不触发本分支（防递归）。
+  // [本地改造 2026-08-16] 语音规则（用户定义，已写入人设 shared-persona/global-persona）：
+  // 1) 用户本轮发过语音 → 必须语音回复（自动合成，TTS auto）
+  // 2) 用户文本明确要求发语音 / 指定服务商（小米/微软）→ 自动合成（用指定 provider）
+  // 3) 其他情况不自动合成——agent 自主决定，需要时调用 send_voice 工具主动发
+  // 异步 fire-and-forget，不阻塞事件推送；只处理 turn/end，append 的 voice/reply 不触发本分支（防递归）。
   ctx.on('session/event', (session, event) => {
     if (event.type !== 'turn/end') return
     const turn = event.data.turn
@@ -1492,12 +1494,19 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       try {
         const events = session.events
         let userSpokeVoice = false
+        let requestedProvider: string | null = null
         // 只取该 turn 最后一条非空 assistant 文本（语音回复念整段长回复会几十秒）。
         let lastAssistantText = ''
         for (const ev of events) {
           if (ev.type === 'user/message') {
             const content = (ev.data as { content?: readonly unknown[] }).content ?? []
-            if (content.some(block => (block as { type?: string })?.type === 'voice')) userSpokeVoice = true
+            let userText = ''
+            for (const block of content) {
+              const type = (block as { type?: string })?.type
+              if (type === 'voice') userSpokeVoice = true
+              else if (type === 'text') userText += (block as { text?: string }).text ?? ''
+            }
+            if (userText.trim() !== '' && requestedProvider === null) requestedProvider = voiceRequestProvider(userText)
           } else if (ev.type === 'assistant/message' && ev.data.turn === turn) {
             const text = (ev.data.message.content as readonly unknown[])
               .filter(block => (block as { type?: string })?.type === 'text')
@@ -1506,13 +1515,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             if (text.trim() !== '') lastAssistantText = text
           }
         }
-        if (!userSpokeVoice || lastAssistantText === '') return
+        if ((!userSpokeVoice && requestedProvider === null) || lastAssistantText === '') return
         // [本地改造 2026-08-16] 语音回复只念关键结论：截断到约 80 字（中文 TTS
         // 每秒约 4-5 字，80 字 ≈ 15-20 秒语音，适合语音回复；过长会合成几十秒音频）。
         const speak = lastAssistantText.length > 80
           ? `${lastAssistantText.slice(0, 80)}（完整内容请查看文字回复）`
           : lastAssistantText
-        const audio = await synthesizeReplyVoice(speak)
+        const audio = await synthesizeReplyVoice(speak, requestedProvider ?? 'auto')
         if (audio === null) return
         const attachment = await saveVoiceFile(
           voiceStorageRoot(), audio.data, audio.mediaType as never, audio.durationMs,
@@ -1529,6 +1538,88 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       }
     })()
   })
+
+  // [本地改造 2026-08-16] 语音随手可用：agent 主动发语音工具（人设规则3——自主选择场景）。
+  // host 内置工具，任何新会话自动注入，不用教不用搜：用户要求发语音 / 指定服务商
+  // （小米/微软）/ 或 agent 判断语音回复体验更好时，直接调用本工具。
+  ctx.tools.register(defineTool({
+    name: 'send_voice',
+    description: '向用户发送一条语音消息：把 text 用 TTS 合成后作为独立语音横条出现在聊天里'
+      + '（可播放、可回看、手机可播）。何时调用：① 用户明确要求"发个语音/语音回复/用语音说"；'
+      + '② 用户指定用某个服务商（小米/微软）的语音；③ 你判断语音回复体验更好时。'
+      + '注意：用户发语音时系统会自动回语音，无需调用本工具。',
+    parameters: {
+      text: {
+        type: 'string', required: true,
+        description: '要念出的内容（纯文本，不要带 Markdown 符号，80 字以内最佳）',
+      },
+      provider: {
+        type: 'string', default: 'auto',
+        description: 'TTS 服务商：auto(默认)/edge(微软)/xiaomi(小米)/melo/matcha/ali',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          voiceId: { type: 'string' },
+          durationMs: { type: 'number' },
+          error: { type: 'string' },
+        },
+      },
+      render(_args, value) {
+        if (value.ok) {
+          return [{
+            type: 'text',
+            text: `语音已发送（voiceId: ${value.voiceId}，时长 ${((value.durationMs ?? 0) / 1000).toFixed(1)} 秒）`,
+          }]
+        }
+        return [{ type: 'text', text: `语音发送失败：${value.error ?? '未知错误'}` }]
+      },
+    },
+    async execute(args, exec) {
+      const agent = exec.agent
+      if (agent === undefined) return { ok: false as const, error: 'no session context' }
+      const session = agent.session
+      const text = String(args.text ?? '').trim()
+      if (text === '') return { ok: false as const, error: 'text is empty' }
+      const provider = String(args.provider ?? 'auto')
+      try {
+        const audio = await synthesizeReplyVoice(text, provider)
+        if (audio === null) return { ok: false as const, error: 'TTS synthesis failed' }
+        const attachment = await saveVoiceFile(
+          voiceStorageRoot(), audio.data, audio.mediaType as never, audio.durationMs,
+        )
+        const turn = session.events
+          .filter((event): event is SessionEvent & { type: 'turn/start' } => event.type === 'turn/start')
+          .at(-1)?.data.turn ?? 0
+        session.append('voice/reply', {
+          turn,
+          voiceId: attachment.voiceId,
+          mediaType: attachment.mediaType,
+          bytes: attachment.bytes,
+          ...(attachment.durationMs === undefined ? {} : { durationMs: attachment.durationMs }),
+        })
+        return {
+          ok: true as const,
+          voiceId: attachment.voiceId,
+          ...(attachment.durationMs === undefined ? {} : { durationMs: attachment.durationMs }),
+        }
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : 'unknown error' }
+      }
+    },
+  }))
+
+  /** [本地改造 2026-08-16] 用户文本是否明确要求语音回复；返回要用的 TTS provider，否则 null。 */
+  function voiceRequestProvider(text: string): string | null {
+    if (!/(语音回复|回语音|回个语音|发个语音|发语音|用语音|语音回|语音说|语音发|语音告诉|念给我|语音播报|语音听)/.test(text)) return null
+    if (/小米/.test(text)) return 'xiaomi'
+    if (/微软|edge/i.test(text)) return 'edge'
+    return 'auto'
+  }
 
   /** Remove a wait before settling it: synchronous deletion makes the first claimant win. */
   function claimQuestion(pending: PendingQuestion, outcome: 'answered' | 'cancelled'): void {

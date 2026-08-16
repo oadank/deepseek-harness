@@ -259,7 +259,12 @@ export class PwshLocalExecutor extends ShellExecutor {
   /** Foreground run of an exact argv (the confining subclass re-wraps it). */
   protected async runArgv(spec: ShellExecSpec, argv: readonly string[]): Promise<ShellRunResult> {
     // One deadline combines timeout and upstream cancellation; disposal clears its timer.
+    // [本地改造 2026-08-16 调试] 打印生效超时与 abort 时机，定位超时杀进程失效问题。
+    console.error(`[pwsh-debug] run timeoutMs=${spec.timeoutMs} signal=${spec.signal !== undefined} aborted=${spec.signal?.aborted}`)
     using d = deadline(spec.signal, spec.timeoutMs, 'BASH_TIMEOUT')
+    d.signal.addEventListener('abort', () => {
+      console.error(`[pwsh-debug] deadline aborted reason=${String(d.signal.reason)}`)
+    })
     const handle = this.ctx.subprocess.spawn(this.spawnSpec(spec, spec.stdoutMaxBytes, d.signal, argv))
     const outcome = await handle.done
     const collected = PwshLocalExecutor.collected(handle)

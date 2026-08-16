@@ -185,7 +185,10 @@ export async function synthesizeReplyVoice(text: string, provider?: string): Pro
   const before = new Set<string>()
   for (const entry of await readdir(outputDir).catch(() => [])) before.add(entry)
   return new Promise<SynthesizedVoice | null>((resolveSynthesis) => {
-    const args = [TTS_CLI, text]
+    // [本地改造 2026-08-16] TTS 不念 Markdown 符号：清理 ##、**、|、` 等标记，
+    // 只保留可朗读的纯文本。
+    const speak = stripMarkdown(text)
+    const args = [TTS_CLI, speak]
     if (provider !== undefined && provider !== '' && provider !== 'auto') {
       args.push('--provider', provider)
     }
@@ -261,6 +264,36 @@ export async function synthesizeReplyVoice(text: string, provider?: string): Pro
 function looksLikeOgg(data: Uint8Array): boolean {
   return data.length >= 4
     && data[0] === 0x4F && data[1] === 0x67 && data[2] === 0x67 && data[3] === 0x53 // 'OggS'
+}
+
+/**
+ * [本地改造 2026-08-16] Strip Markdown syntax for TTS reading: headings, bold/
+ * italic markers, inline code, links, tables, lists, and dividers become plain
+ * readable text. Multi-line output is joined with spaces so the engine speaks
+ * it fluently.
+ */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')            // fenced code blocks
+    .replace(/`([^`]+)`/g, '$1')                  // inline code
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')      // links: keep label
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')     // images: keep alt
+    .replace(/^#{1,6}\s*/gm, '')                  // ATX headings
+    .replace(/^>+\s*/gm, '')                      // blockquotes
+    .replace(/^\s*[-*+]\s+/gm, '')                // list bullets
+    .replace(/^\s*\d+[.)]\s+/gm, '')              // numbered lists
+    .replace(/^\s*\|?[\s:|-]+\|?\s*$/gm, '')      // table separator rows (| --- | --- |)
+    .replace(/^[-*_]{3,}\s*$/gm, '')              // horizontal rules
+    .replace(/\|/g, ' ')                          // table pipes
+    .replace(/\*\*([^*]+)\*\*/g, '$1')            // bold
+    .replace(/\*([^*]+)\*/g, '$1')                // italic
+    .replace(/__([^_]+)__/g, '$1')                // bold underscore
+    .replace(/_([^_]+)_/g, '$1')                  // italic underscore
+    .replace(/~~([^~]+)~~/g, '$1')                // strikethrough
+    .replace(/^\s*[-*_]\s*$/gm, '')               // lone dash rows
+    .replace(/\s*\n\s*/g, ' ')                    // newlines → space (fluent speech)
+    .replace(/\s{2,}/g, ' ')
+    .trim()
 }
 
 /**

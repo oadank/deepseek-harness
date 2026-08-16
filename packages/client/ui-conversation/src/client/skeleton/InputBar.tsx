@@ -938,7 +938,7 @@ export function InputBar({
                   className={css.primary}
                   aria-label={t('input.stop')}
                   disabled={stop === undefined}
-                  onMouseDown={keepFocus}
+                  onMouseDown={releaseFocus}
                   onClick={stop}
                 >
                   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>

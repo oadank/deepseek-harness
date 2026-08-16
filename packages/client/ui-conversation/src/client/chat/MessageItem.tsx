@@ -255,8 +255,15 @@ export function VoiceCard({ attachment, load, t }: {
   const seconds = attachment.durationMs !== undefined
     ? Math.max(1, Math.ceil(attachment.durationMs / 1_000))
     : null
+  // [本地改造 2026-08-16] 语音条宽度按时长变化（微信风格）：无识别文本的语音
+  // （如 agent 语音回复横条）按秒数线性定宽，1s≈44px、10s≈80px、30s≈160px、
+  // 60s≈280px，上限 320px；带 transcript 的用户语音由文本自然撑宽（保持现状）。
+  const hasTranscript = attachment.transcript !== undefined && attachment.transcript !== ''
+  const durationWidth = !hasTranscript && attachment.durationMs !== undefined
+    ? { width: Math.min(320, Math.max(44, 40 + (seconds ?? 1) * 4)) }
+    : undefined
   return (
-    <div className={css.voiceCard} data-voice>
+    <div className={css.voiceCard} data-voice style={durationWidth}>
       <button
         type="button"
         className={css.voicePlay}

@@ -275,10 +275,18 @@ export function killGroup(pid: number, sig: NodeJS.Signals): void {
  */
 export function taskkillProcessTree(pid: number): void {
   if (pid <= 0) return
-  // Outcome deliberately unchecked: an already-absent tree (status 128), exit
-  // races, and a missing taskkill binary (spawnSync reports, never throws) are
-  // as tolerable here as ESRCH is for a POSIX group signal.
-  spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+  // [本地改造 2026-08-16] taskkill 优先用 System32 全路径：nssm 服务的 PATH 快照
+  // 曾缺 System32，导致 spawnSync('taskkill') ENOENT 静默失败、挂起进程永远杀不掉
+  // （超时/停止全部失效）。全路径 + PATH 兜底双保险。
+  const root = process.env.SystemRoot ?? 'C:\\Windows'
+  const candidates = [join(root, 'System32', 'taskkill.exe'), 'taskkill']
+  for (const command of candidates) {
+    // Outcome deliberately unchecked: an already-absent tree (status 128), exit
+    // races, and a missing taskkill binary (spawnSync reports, never throws) are
+    // as tolerable here as ESRCH is for a POSIX group signal.
+    const result = spawnSync(command, ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    if (result.error === undefined || (result.error as NodeJS.ErrnoException).code !== 'ENOENT') break
+  }
 }
 
 /**

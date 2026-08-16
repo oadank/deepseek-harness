@@ -27,6 +27,8 @@
   padding: 0 16px 0 10px;
   background: var(--dsw-specific-bubble);
   border-radius: 22px;
+  /* [本地改造 2026-08-16] 无 transcript 的语音按时长定宽，宽度须含 padding。 */
+  box-sizing: border-box;
 }
 
 .voicePlay {
