@@ -164,7 +164,7 @@ function withCompaction(raw: string, meter: TokenMeter): string {
     data: {
       commandId,
       kind: 'success',
-      text: `Compacted ${surfaceSeqs.length} history items (~${shadowedTokenCount} tokens).`,
+      text: `已压缩 ${surfaceSeqs.length} 条历史（约 ${shadowedTokenCount} tokens）。`,
       sourceEventSeq: summarySeq,
     },
   })
@@ -468,7 +468,7 @@ describe('web e2e: seeded history renders through cold resume', () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-seeded-command-row'))
     // The Access chip submits `/permission <preset>` — a host command with no
     // model call, so the settled row renders keylessly over this cold history.
-    // The row copy is the assertion: `permission · preset read-only`,
+    // The row copy is the assertion: `permission · 已切换预设：read-only`,
     // where neither half repeats the other (the dispatched `/` and its
     // argument stay out of the title, and the settlement text never restates
     // the command's own name).
@@ -477,7 +477,7 @@ describe('web e2e: seeded history renders through cold resume', () => {
     await page.getByRole('button', { name: 'Access mode, current: Read Only' }).waitFor({ timeout: 10_000 })
     // Scoped to the row itself, so unrelated page text that happens to read
     // `permission` (a future resident slash menu) cannot satisfy or break it.
-    const row = page.locator('[data-variant="others"]').filter({ hasText: 'preset read-only' })
+    const row = page.locator('[data-variant="others"]').filter({ hasText: '已切换预设：read-only' })
     await expect.poll(() => row.count(), { timeout: 10_000 }).toBe(1)
     expect(await row.getByText('permission', { exact: true }).count()).toBe(1)
     expect(await row.getByText('/permission read-only', { exact: true }).count()).toBe(0)
@@ -495,7 +495,7 @@ describe('web e2e: seeded history renders through cold resume', () => {
       await input.fill('/feedback the diff view is unreadable')
       await input.press('Enter')
       const row = page.locator('[data-variant="others"]').filter({
-        hasText: `Feedback recorded for session ${SEED_ID}`,
+        hasText: `已记录对会话 ${SEED_ID} 的反馈`,
       })
       await row.waitFor({ timeout: 10_000 })
       const disclosure = row.locator('[data-expandable]')
@@ -508,10 +508,10 @@ describe('web e2e: seeded history renders through cold resume', () => {
       const done = agent.session.events.filter(event => event.type === 'command/done').at(-1)
       if (done?.type !== 'command/done') throw new Error('feedback command did not settle')
       const [sessionLine, userLine, extraLine] = done.data.text?.split('\n') ?? []
-      expect(sessionLine).toBe(`Feedback recorded for session ${SEED_ID}`)
-      expect(userLine).toMatch(/^Anonymous user: [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\./i)
+      expect(sessionLine).toBe(`已记录对会话 ${SEED_ID} 的反馈`)
+      expect(userLine).toMatch(/^匿名用户： [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}。/u)
       expect(extraLine).toBeUndefined()
-      const userId = userLine?.match(/^Anonymous user: ([0-9a-f-]+)/i)?.[1]
+      const userId = userLine?.match(/^匿名用户： ([0-9a-f-]+)/u)?.[1]
       if (userId === undefined) throw new Error('feedback command omitted the user id')
 
       const snapshot = (await captureStableAria(page, '[class*="centerCol"]', scaffold.workspaceCwd))

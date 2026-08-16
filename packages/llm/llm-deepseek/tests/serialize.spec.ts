@@ -160,17 +160,54 @@ describe('serializeMessages', () => {
     expect(wire).toEqual([{ role: 'user', content: 'see chart' }])
   })
 
-  it('rejects image blocks instead of silently flattening them away', () => {
-    expect(() => serializeMessages([createUserMessage({
+  it('flattens image blocks into local-path text for the vision MCP (本地改造)', () => {
+    const wire = serializeMessages([createUserMessage({
       content: [{
         type: 'image',
         attachment: {
           attachmentId: AttachmentId(`sha256:${'a'.repeat(64)}`),
-          mediaType: 'image/png', bytes: 68, width: 1, height: 1,
+          mediaType: 'image/png', bytes: 68, width: 1, height: 1, name: 'shot.png',
         },
       }],
       source: { kind: 'plugin', plugin: 'test' },
-    })])).toThrow(expect.objectContaining({ code: 'UNSUPPORTED_CONTENT' }))
+    })])
+    expect(wire).toHaveLength(1)
+    expect(wire[0]).toEqual({
+      role: 'user',
+      content: expect.stringMatching(/^\[用户发送了一张图片，名称 "shot.png"/),
+    })
+  })
+
+  it('flattens voice blocks into the ASR transcript when the host recorded one (本地改造)', () => {
+    const wire = serializeMessages([createUserMessage({
+      content: [{
+        type: 'voice',
+        attachment: {
+          voiceId: 'sha256:voice', mediaType: 'audio/webm', bytes: 100, durationMs: 3200,
+          transcript: '帮我查一下明天的天气',
+        },
+      }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })])
+    expect(wire).toEqual([{
+      role: 'user',
+      content: '[用户发送了一条语音（时长 3 秒），识别内容：帮我查一下明天的天气]',
+    }])
+  })
+
+  it('flattens voice blocks without a transcript into local-path text for the agent to transcribe (本地改造)', () => {
+    const wire = serializeMessages([createUserMessage({
+      content: [{
+        type: 'voice',
+        attachment: { voiceId: 'sha256:voice', mediaType: 'audio/webm', bytes: 100 },
+      }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })])
+    expect(wire).toHaveLength(1)
+    expect(wire[0]).toEqual({
+      role: 'user',
+      content: expect.stringMatching(/^\[用户发送了一条语音，本地语音文件路径: .*\\attachments\\v1\\objects\\vo\\voice\]$/),
+    })
   })
 
   it('emits an empty user message rather than dropping block-less messages', () => {

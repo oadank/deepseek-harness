@@ -87,6 +87,24 @@ export interface SessionProjectionsBlock {
 export type PromptContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; mediaType: ImageMediaType; data: string; name?: string }
+  | { type: 'voice'; mediaType: VoiceMediaType; data: string; durationMs?: number }
+
+/** Audio formats accepted by the version-one browser voice wire. */
+export type VoiceMediaType = 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/wav' | 'audio/mpeg'
+
+/** Durable, serializable metadata for one immutable voice object. */
+export interface VoiceAttachmentRef {
+  /** Opaque storage identifier; never a filesystem path or bearer URL. */
+  voiceId: string
+  /** Media type of the stored browser-uploaded bytes. */
+  mediaType: VoiceMediaType
+  /** Exact encoded byte length. */
+  bytes: number
+  /** Optional recorder-reported length in milliseconds. */
+  durationMs?: number
+  /** Local ASR transcript; absent when recognition failed or is unavailable. */
+  transcript?: string
+}
 
 /** Complete model selection for one session. */
 export interface ModelSelection {
@@ -355,6 +373,49 @@ export interface SessionsApi {
   /** Reads one durable image after proving that this session's log references its id. */
   attachment(request: RpcRequest<{ sessionId: SessionId; attachmentId: AttachmentIdType }>):
   Promise<RpcResponse<{ attachment: ImageAttachmentRef; data: string }>>
+
+  /** Reads one durable voice object after proving that this session's log references its id. */
+  voice(request: RpcRequest<{ sessionId: SessionId; voiceId: string }>):
+  Promise<RpcResponse<{ attachment: VoiceAttachmentRef; data: string }>>
+
+  /**
+   * Transcribe one browser recording on the fly without storing it (the
+   * "speak-to-text" gesture sends the resulting text as an ordinary message).
+   * @param request - temporary voice bytes exactly as the composer captured them.
+   * @returns recognized text, or null when recognition failed or is unavailable.
+   */
+  voiceAsr(request: RpcRequest<{
+    sessionId: SessionId
+    mediaType: VoiceMediaType
+    data: string
+    durationMs?: number
+  }>): Promise<RpcResponse<{ text: string | null }>>
+
+  /**
+   * Synthesize one reply into speech through the local TTS engines and return
+   * the encoded audio directly (nothing durable — the browser plays it inline).
+   * @param request - reply text and optional TTS provider override (auto by default).
+   * @returns encoded audio and declared media type, or null when synthesis failed.
+   */
+  voiceTts(request: RpcRequest<{
+    sessionId: SessionId
+    text: string
+    provider?: string
+  }>): Promise<RpcResponse<{ mediaType: string; data: string; durationMs?: number } | null>>
+
+  /**
+   * [本地改造 2026-08-16] Send one synthesized voice message into the session:
+   * the host speaks `text`, persists it as a `voice/reply` event (an independent
+   * durable voice row beside the user's own voice messages), so the agent can
+   * actively send a voice message on its own — no user voice needed.
+   * @param request - text to speak and optional TTS provider override.
+   * @returns accepted once the voice/reply event is logged.
+   */
+  sendVoiceMessage(request: RpcRequest<{
+    sessionId: SessionId
+    text: string
+    provider?: string
+  }>): Promise<RpcResponse<{ accepted: true }>>
 
   /**
    * Edits, removes, or strictly steers one pending queued occurrence on an ordinary session.

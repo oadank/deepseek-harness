@@ -67,6 +67,10 @@ function mountBar(shell: SessionInputShell, over?: { running?: boolean; disabled
     renderSlot: (() => null) as InputBarProps['renderSlot'],
     stop: vi.fn(),
     command: () => Promise.resolve(true),
+    readBalance: undefined,
+    sendVoice: undefined,
+    transcribeVoice: undefined,
+    synthesizeVoice: undefined,
     // Mirrors the real lookup chain (conversation namespace, then common).
     t: makeTranslate(zh, commonZh),
     variant: 'composer',

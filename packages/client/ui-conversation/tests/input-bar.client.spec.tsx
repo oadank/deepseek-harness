@@ -187,6 +187,10 @@ function bench(over?: BenchOptions) {
     useMenuLauncher: bindSnapshotSelector(menuLauncher),
     stop,
     command: over?.command ?? (() => Promise.resolve(true)),
+    readBalance: undefined,
+    sendVoice: undefined,
+    transcribeVoice: undefined,
+    synthesizeVoice: undefined,
     // Mirrors the real lookup chain (conversation namespace, then common).
     t: over?.t ?? makeTranslate(zh, commonZh),
     renderSlot,

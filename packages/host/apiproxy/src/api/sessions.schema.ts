@@ -13,6 +13,7 @@ import type { Wire } from './rpc.schema.ts'
 import type {
   HistoryEntry, ModelCatalogFailure, ModelCatalogModel, ModelProviderGroup, ModelReasoning,
   ModelReasoningEffort, ModelSelection, SessionListMetadata, SessionProjectionsBlock, SessionSearchItem, SessionSummary,
+  VoiceAttachmentRef,
 } from './sessions.ts'
 import type { ToolEventView } from './events.ts'
 import type { AttachmentIdType, ImageAttachmentLimits, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
@@ -279,10 +280,21 @@ export const imageMediaTypeSchema = z.union([
   z.literal('image/gif'),
 ])
 
+/** Audio media types accepted by the version-one browser voice wire. */
+export const voiceMediaTypeSchema = z.union([
+  z.literal('audio/webm'),
+  z.literal('audio/ogg'),
+  z.literal('audio/mp4'),
+  z.literal('audio/wav'),
+  // [本地改造 2026-08-16] TTS 语音回复为 MP3（synthesizeReplyVoice 统一转 mp3）。
+  z.literal('audio/mpeg'),
+])
+
 /** Prompt wire content is intentionally narrower than merge-extensible durable core content. */
 export const promptContentPartSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string() }),
   z.object({ type: z.literal('image'), mediaType: imageMediaTypeSchema, data: z.string(), name: z.string().optional() }),
+  z.object({ type: z.literal('voice'), mediaType: voiceMediaTypeSchema, data: z.string(), durationMs: z.number().int().positive().optional() }),
 ])
 
 /** session.prompt request payload, including optional browser-local request provenance. */
@@ -326,6 +338,66 @@ export const sessionAttachmentValueSchema = z.object({
   attachment: imageAttachmentRefSchema,
   data: z.string(),
 }) satisfies z.ZodType<Wire<ResponseValue<'session.attachment'>>>
+
+/** Durable voice reference returned from the authenticated session lookup. */
+export const voiceAttachmentRefSchema = z.object({
+  voiceId: z.string().min(1),
+  mediaType: voiceMediaTypeSchema,
+  bytes: z.number().int().positive(),
+  durationMs: z.number().int().positive().optional(),
+  transcript: z.string().optional(),
+}) as unknown as z.ZodType<VoiceAttachmentRef>
+
+/** session.voice request payload. */
+export const sessionVoiceRequestSchema = z.object({
+  sessionId: sessionIdSchema,
+  voiceId: z.string().min(1),
+}) satisfies z.ZodType<Wire<RequestPayload<'session.voice'>>>
+
+/** session.voice response value. */
+export const sessionVoiceValueSchema = z.object({
+  attachment: voiceAttachmentRefSchema,
+  data: z.string(),
+}) satisfies z.ZodType<Wire<ResponseValue<'session.voice'>>>
+
+/** session.voiceAsr request payload. */
+export const sessionVoiceAsrRequestSchema = z.object({
+  sessionId: sessionIdSchema,
+  mediaType: voiceMediaTypeSchema,
+  data: z.string(),
+  durationMs: z.number().int().positive().optional(),
+}) satisfies z.ZodType<Wire<RequestPayload<'session.voiceAsr'>>>
+
+/** session.voiceAsr response value. */
+export const sessionVoiceAsrValueSchema = z.object({
+  text: z.string().nullable(),
+}) satisfies z.ZodType<Wire<ResponseValue<'session.voiceAsr'>>>
+
+/** session.voiceTts request payload. */
+export const sessionVoiceTtsRequestSchema = z.object({
+  sessionId: sessionIdSchema,
+  text: z.string().min(1),
+  provider: z.string().optional(),
+}) satisfies z.ZodType<Wire<RequestPayload<'session.voiceTts'>>>
+
+/** session.voiceTts response value. */
+export const sessionVoiceTtsValueSchema = z.object({
+  mediaType: z.string(),
+  data: z.string(),
+  durationMs: z.number().int().positive().optional(),
+}).nullable() satisfies z.ZodType<Wire<ResponseValue<'session.voiceTts'>>>
+
+/** session.sendVoiceMessage request payload. */
+export const sessionSendVoiceMessageRequestSchema = z.object({
+  sessionId: sessionIdSchema,
+  text: z.string().min(1),
+  provider: z.string().optional(),
+}) satisfies z.ZodType<Wire<RequestPayload<'session.sendVoiceMessage'>>>
+
+/** session.sendVoiceMessage response value. */
+export const sessionSendVoiceMessageValueSchema = z.object({
+  accepted: z.literal(true),
+}) satisfies z.ZodType<Wire<ResponseValue<'session.sendVoiceMessage'>>>
 
 /** session.updateQueue request payload. */
 export const sessionUpdateQueueRequestSchema = z.object({

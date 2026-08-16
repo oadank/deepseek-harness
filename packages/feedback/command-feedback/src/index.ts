@@ -15,7 +15,7 @@ import { getOrCreateAnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 export const name = 'command-feedback'
 export const inject = ['commands']
 
-const USAGE = 'Usage: /feedback <text>'
+const USAGE = '用法：/feedback <内容>'
 
 /** Fail closed when a future sharing status reaches the sentence switch. */
 /* v8 ignore next 3 -- only the ignored default arm calls this; the closed union cannot reach it via the public API. */
@@ -27,11 +27,11 @@ function assertNever(value: never): never {
 function sharingSentence(sharing: SessionTelemetrySharingStatus): string {
   switch (sharing) {
     case 'full':
-      return 'Session sharing is enabled.'
+      return '会话共享已开启。'
     case 'feedback-only':
-      return 'Session sharing is feedback-gated; recording feedback releases the session prefix for sharing.'
+      return '会话共享受反馈门控；记录反馈会释放会话前缀用于共享。'
     case 'disabled':
-      return 'Session sharing is disabled.'
+      return '会话共享已关闭。'
     /* v8 ignore next 2 -- the seam's closed union cannot reach the default; a future status must be given a sentence here. */
     default:
       return assertNever(sharing)
@@ -48,7 +48,7 @@ function sharingSentence(sharing: SessionTelemetrySharingStatus): string {
  */
 function sharingDisclosure(telemetry: SessionTelemetryBackend | undefined): string {
   if (telemetry === undefined) {
-    return 'Session sharing is not configured.'
+    return '会话共享未配置。'
   }
   return sharingSentence(telemetry.sharing)
 }
@@ -86,13 +86,13 @@ export function recordFeedback(session: Session, text: string): void {
  */
 function executeFeedbackCommand(invocation: CommandInvocation, ctx: Context): CommandResult {
   if (invocation.rawInput.trim().length === 0) {
-    return { kind: 'error', text: `Feedback text is required. ${USAGE}` }
+    return { kind: 'error', text: `请输入反馈内容。${USAGE}` }
   }
   recordFeedback(invocation.agent.session, invocation.rawInput)
   const telemetry = ctx.get('sessionTelemetry')
   return {
     kind: 'success',
-    text: `Feedback recorded for session ${invocation.agent.session.id}\nAnonymous user: ${getOrCreateAnonymousUserId()}. ${sharingDisclosure(telemetry)}`,
+    text: `已记录对会话 ${invocation.agent.session.id} 的反馈\n匿名用户：${getOrCreateAnonymousUserId()}。${sharingDisclosure(telemetry)}`,
   }
 }
 
@@ -100,8 +100,8 @@ function executeFeedbackCommand(invocation: CommandInvocation, ctx: Context): Co
 export function apply(ctx: Context): void {
   ctx.commands.register({
     name: 'feedback',
-    description: 'record feedback about this session',
-    input: { hint: '<text>' },
+    description: '记录对本会话的反馈',
+    input: { hint: '<内容>' },
     recordInput: false,
     handler: invocation => executeFeedbackCommand(invocation, ctx),
   })

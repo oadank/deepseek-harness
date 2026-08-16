@@ -5,7 +5,7 @@ import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-atta
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type {
   HistoryEntry, IApiClient, MessageId, MuxFrame, PromptContentPart, QueueAction, RpcError,
-  RpcId, RpcResponse, RpcResult, SessionId, SubagentAddress, ToolEventView,
+  RpcId, RpcResponse, RpcResult, SessionId, SubagentAddress, ToolEventView, VoiceAttachmentRef,
 } from '@deepseek-ai/dsh-api-remotes/client'
 // Value import from the inline-safe wire layer (not the connection plugin):
 // plugin-to-plugin value imports are a bundle purity error.
@@ -275,6 +275,28 @@ export class Session implements SessionFace {
       const result = (await this.api.sessions.attachment({
         sessionId: this.sessionId,
         attachmentId,
+      })).result
+      if (!result.ok) return result
+      const binary = atob(result.value.data)
+      const data = Uint8Array.from(binary, char => char.charCodeAt(0))
+      return { ok: true, value: { attachment: result.value.attachment, data } }
+    } catch (error) {
+      return transportError(error)
+    }
+  }
+
+  /**
+   * Resolve one voice object referenced by this session into browser-consumable bytes.
+   * @param voiceId - opaque id found in the folded session log.
+   * @returns the authenticated reference and decoded bytes.
+   */
+  async readVoice(
+    voiceId: string,
+  ): Promise<RpcResult<{ attachment: VoiceAttachmentRef; data: Uint8Array }>> {
+    try {
+      const result = (await this.api.sessions.voice({
+        sessionId: this.sessionId,
+        voiceId,
       })).result
       if (!result.ok) return result
       const binary = atob(result.value.data)

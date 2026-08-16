@@ -131,6 +131,19 @@
   justify-content: center;
 }
 
+/* [本地改造 2026-08-16] 语音铁律回复：左对齐行，位于最后一条助手消息下方。 */
+.ttsReplyRow {
+  display: flex;
+  justify-content: flex-start;
+  padding: 2px 0;
+}
+
+.ttsReplyPending {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 28px;
+}
+
 .older button {
   border: none;
   border-radius: 14px;

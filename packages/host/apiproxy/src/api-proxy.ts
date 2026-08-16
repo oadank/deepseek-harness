@@ -4,16 +4,16 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
-import { AttachmentError, admitEncodedImages } from '@deepseek-ai/dsh-attachment'
+import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
@@ -36,7 +36,7 @@ import {
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {
-  ApiProxy, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
+  ApiProxy, BalanceView, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
   ModelCatalogFailure, ModelProviderGroup,
   ModelReasoning, MuxFrame, PromptContentPart, QuestionResponsePayload, SessionListMetadata, SessionProjectionsBlock, SessionSearchItem,
   QueuedInboxItem, SessionSummary, SettingsNamespaceView, SubagentAddress, JobView, ToolEventView,
@@ -51,6 +51,8 @@ import {
   type SessionLogExportReady,
   type SessionLogCompressionLevel,
 } from './session-export.ts'
+import { readVoiceFile, saveVoiceFile, synthesizeReplyVoice, transcribeVoice, voiceObjectPath, voiceStorageRoot } from './voice.ts'
+import type { VoiceAttachmentRef } from './api/sessions.ts'
 import type { SessionRawArtifact } from '@deepseek-ai/dsh-session-persistence'
 import {
   SESSION_SEARCH_RESULT_LIMIT,
@@ -124,18 +126,139 @@ export const DEFAULT_COLD_BLANK_PROBE_MAX_BYTES = 1024
 /** Conversation message event types (the pagination counting unit). */
 const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
 
+/** Decode the browser payload while rejecting non-canonical base64 forms. */
+function decodeBase64(data: string): Uint8Array {
+  const decoded = Buffer.from(data, 'base64')
+  if (data.length === 0 || decoded.toString('base64') !== data) {
+    throw new AttachmentError('Image upload is not canonical base64.', 'INVALID_IMAGE_BASE64')
+  }
+  return new Uint8Array(decoded)
+}
+
+/** DeepSeek 直连余额缓存（5 秒过期：balance 接口很轻，实时性优先，仅防抖重复轮询）。 */
+let deepseekBalanceCache: { value: BalanceView | null; cachedAt: number } | null = null
+
+/**
+ * 查询 DeepSeek 直连账户余额。读取 DEEPSEEK_API_KEY 凭证（dsh-web 直连
+ * deepseek 路由的 key），调官方 GET /user/balance；无凭证、非直连部署或
+ * 查询失败一律返回 null（余额只是辅助指示，绝不让 UI 报错）。
+ * @param ctx - host context（读 credentials 可选服务）。
+ * @returns 余额视图；不可用时为 null。
+ */
+async function readDeepSeekBalance(ctx: Context): Promise<BalanceView | null> {
+  const now = Date.now()
+  if (deepseekBalanceCache !== null && now - deepseekBalanceCache.cachedAt < 5_000) {
+    return deepseekBalanceCache.value
+  }
+  let apiKey: string | undefined
+  const credentials = ctx.get('credentials')
+  if (credentials !== undefined) {
+    const hit = await credentials.resolve(credentialRef('DEEPSEEK_API_KEY'))
+    apiKey = hit?.value
+  } else {
+    apiKey = process.env.DEEPSEEK_API_KEY
+  }
+  if (apiKey === undefined || apiKey.length === 0) {
+    deepseekBalanceCache = { value: null, cachedAt: now }
+    return null
+  }
+  try {
+    const response = await fetch('https://api.deepseek.com/user/balance', {
+      headers: { authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) {
+      deepseekBalanceCache = { value: null, cachedAt: now }
+      return null
+    }
+    const data = await response.json() as {
+      balance_infos?: Array<{ currency: string; total_balance: string; granted_balance: string; topped_up_balance: string }>
+    }
+    const info = data.balance_infos?.[0]
+    if (info === undefined) {
+      deepseekBalanceCache = { value: null, cachedAt: now }
+      return null
+    }
+    const value: BalanceView = {
+      currency: info.currency,
+      total: info.total_balance,
+      granted: info.granted_balance,
+      toppedUp: info.topped_up_balance,
+    }
+    deepseekBalanceCache = { value, cachedAt: now }
+    return value
+  } catch {
+    // 网络抖动/超时：保留旧缓存值（若有），否则 null——绝不把失败抛给 UI。
+    return deepseekBalanceCache?.value ?? null
+  }
+}
+
 /** Validate one prompt as a batch before publishing any durable image object. */
 async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
   if (content.every(part => part.type === 'text')) {
     return content.map(part => ({ type: 'text', text: part.text }))
   }
-  const refs = await admitEncodedImages(ctx.attachments, content.filter(part => part.type === 'image'))
-  let next = 0
-  return content.map(part => part.type === 'text'
-    ? { type: 'text', text: part.text }
-    // admitEncodedImages returns one reference per image part in order.
-    : { type: 'image', attachment: refs[next++] as ImageAttachmentRef })
+  const limits = ctx.attachments.imageLimits
+  if (content.filter(part => part.type === 'image').length > limits.maxImagesPerMessage) {
+    throw new AttachmentError('Prompt exceeds the configured image-count limit.', 'TOO_MANY_IMAGES')
+  }
+  const prepared = content.map(part => part.type === 'text'
+    ? part
+    : { part, data: decodeBase64(part.data) })
+  const images = prepared.filter((item): item is { part: Extract<PromptContentPart, { type: 'image' }>; data: Uint8Array } =>
+    'part' in item && item.part.type === 'image')
+  const totalBytes = images.reduce((sum, image) => sum + image.data.byteLength, 0)
+  if (totalBytes > limits.maxMessageImageBytes) {
+    throw new AttachmentError('Prompt exceeds the configured aggregate image-byte limit.', 'IMAGES_TOO_LARGE')
+  }
+  for (const image of images) {
+    await ctx.attachments.validateImage({
+      data: image.data,
+      mediaType: image.part.mediaType,
+      ...image.part.name === undefined ? {} : { name: image.part.name },
+    })
+  }
+  const root = voiceStorageRoot()
+  const blocks: ContentBlock[] = []
+  for (const item of prepared) {
+    if (!('data' in item)) {
+      blocks.push({ type: 'text', text: item.text })
+      continue
+    }
+    if (item.part.type === 'voice') {
+      // [本地改造 2026-08-16] 语音消息：录音落盘（与图片同池的内容寻址对象）。
+      // 落盘后**同步自动 ASR**（本地 sherpa 服务）并把识别文本写入 attachment.transcript——
+      // 模型从 serialize 拿到现成识别文本直接回复：自动流程、无需 agent 自觉、
+      // 不再二次注入"用户身份"文本；识别失败时 transcript 缺省，serialize 降级为
+      // 本地路径文本，agent 可主动调工具补识别。
+      let attachment: VoiceAttachmentRef
+      try {
+        attachment = await saveVoiceFile(
+          root, item.data, item.part.mediaType, item.part.durationMs,
+        )
+        const text = await transcribeVoice(voiceObjectPath(root, attachment.voiceId))
+        if (text !== '') attachment = { ...attachment, transcript: text }
+      } catch {
+        throw new AttachmentError('Unable to persist voice object.', 'ATTACHMENT_WRITE_FAILED')
+      }
+      blocks.push({ type: 'voice', attachment })
+      continue
+    }
+    const attachment = await ctx.attachments.saveImage({
+      data: item.data,
+      mediaType: item.part.mediaType,
+      ...item.part.name === undefined ? {} : { name: item.part.name },
+    })
+    blocks.push({ type: 'image', attachment })
+  }
+  return blocks
 }
+
+/**
+ * [本地改造 2026-08-16] 语音识别已内置于 durablePromptContent：落盘后同步调本地 ASR，
+ * transcript 写入 attachment。serialize.ts 优先输出识别文本；仅当识别失败（transcript
+ * 缺省）时才降级为本地路径文本，此时 agent 可用工具补识别。
+ */
 
 /** Search durable content for an image reference, including nested tool results. */
 function imageBlockIn(content: unknown, match: (ref: ImageAttachmentRef) => boolean): ImageAttachmentRef | undefined {
@@ -181,9 +304,68 @@ function imageInEvent(event: SessionEvent, match: (ref: ImageAttachmentRef) => b
   return undefined
 }
 
-/** True when the current model-visible surface contains an image. */
-function messagesHaveImage(messages: readonly { content: readonly ContentBlock[] }[]): boolean {
-  return messages.some(message => contentHasImage(message.content))
+/** Search durable content for a voice reference, including nested tool results. */
+function voiceBlockIn(content: unknown, match: (ref: VoiceAttachmentRef) => boolean): VoiceAttachmentRef | undefined {
+  if (!Array.isArray(content)) return undefined
+  for (const value of content) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
+    const block = value as { type?: unknown; attachment?: unknown; content?: unknown }
+    if (block.type === 'voice' && typeof block.attachment === 'object' && block.attachment !== null) {
+      const ref = block.attachment as VoiceAttachmentRef
+      if (match(ref)) return ref
+    }
+    if (block.type === 'tool-result') {
+      const nested = voiceBlockIn(block.content, match)
+      if (nested !== undefined) return nested
+    }
+  }
+  return undefined
+}
+
+/** Search every durable event carrier that can own model-visible voice content. */
+function voiceInEvent(event: SessionEvent, match: (ref: VoiceAttachmentRef) => boolean): VoiceAttachmentRef | undefined {
+  // [本地改造 2026-08-16] 助手语音回复事件：payload 直接携带 voiceId（非 voice 块）。
+  if (event.type === 'voice/reply') {
+    const { voiceId, mediaType, bytes, durationMs } = event.data as {
+      voiceId: string
+      mediaType: string
+      bytes: number
+      durationMs?: number
+    }
+    const ref: VoiceAttachmentRef = { voiceId, mediaType: mediaType as VoiceAttachmentRef['mediaType'], bytes, ...(durationMs === undefined ? {} : { durationMs }) }
+    return match(ref) ? ref : undefined
+  }
+  const data = event.data as {
+    content?: unknown
+    message?: { content?: unknown }
+    inserted?: Array<{ content?: unknown }>
+    chunk?: { type?: unknown; block?: unknown }
+  }
+  const direct = voiceBlockIn(data.content, match)
+  if (direct !== undefined) return direct
+  if (data.message !== undefined) {
+    const wrapped = voiceBlockIn(data.message.content, match)
+    if (wrapped !== undefined) return wrapped
+  }
+  if (data.inserted !== undefined) {
+    for (const message of data.inserted) {
+      const inserted = voiceBlockIn(message.content, match)
+      if (inserted !== undefined) return inserted
+    }
+  }
+  if (event.type === 'assistant/chunk' && data.chunk?.type === 'block-end') {
+    return voiceBlockIn([data.chunk.block], match)
+  }
+  return undefined
+}
+
+/** Resolve the first voice reference matching one opaque id. */
+function referencedVoice(events: readonly SessionEvent[], voiceId: string): VoiceAttachmentRef | undefined {
+  for (const event of events) {
+    const found = voiceInEvent(event, ref => ref.voiceId === voiceId)
+    if (found !== undefined) return found
+  }
+  return undefined
 }
 
 /** Resolve the first reference matching one opaque id. */
@@ -1299,6 +1481,55 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     broadcast({ type: 'session/queue', sessionId: session.id, items: queueItems(agent, event.data) })
   })
 
+  // [本地改造 2026-08-16] 语音铁律：turn 完成后，若该 turn 用户发过语音且助手有
+  // 文本回复，则把最后一条助手文本合成 TTS、落盘为独立语音消息（voice/reply 事件，
+  // 与用户语音消息同级持久化，前端渲染为单独语音横条）。异步 fire-and-forget，
+  // 不阻塞事件推送；只处理 turn/end，append 的 voice/reply 不触发本分支（防递归）。
+  ctx.on('session/event', (session, event) => {
+    if (event.type !== 'turn/end') return
+    const turn = event.data.turn
+    void (async () => {
+      try {
+        const events = session.events
+        let userSpokeVoice = false
+        // 只取该 turn 最后一条非空 assistant 文本（语音回复念整段长回复会几十秒）。
+        let lastAssistantText = ''
+        for (const ev of events) {
+          if (ev.type === 'user/message') {
+            const content = (ev.data as { content?: readonly unknown[] }).content ?? []
+            if (content.some(block => (block as { type?: string })?.type === 'voice')) userSpokeVoice = true
+          } else if (ev.type === 'assistant/message' && ev.data.turn === turn) {
+            const text = (ev.data.message.content as readonly unknown[])
+              .filter(block => (block as { type?: string })?.type === 'text')
+              .map(block => (block as { text?: string }).text ?? '')
+              .join('')
+            if (text.trim() !== '') lastAssistantText = text
+          }
+        }
+        if (!userSpokeVoice || lastAssistantText === '') return
+        // [本地改造 2026-08-16] 语音回复只念关键结论：截断到约 80 字（中文 TTS
+        // 每秒约 4-5 字，80 字 ≈ 15-20 秒语音，适合语音回复；过长会合成几十秒音频）。
+        const speak = lastAssistantText.length > 80
+          ? `${lastAssistantText.slice(0, 80)}（完整内容请查看文字回复）`
+          : lastAssistantText
+        const audio = await synthesizeReplyVoice(speak)
+        if (audio === null) return
+        const attachment = await saveVoiceFile(
+          voiceStorageRoot(), audio.data, audio.mediaType as never, audio.durationMs,
+        )
+        session.append('voice/reply', {
+          turn,
+          voiceId: attachment.voiceId,
+          mediaType: attachment.mediaType,
+          bytes: attachment.bytes,
+          ...(attachment.durationMs === undefined ? {} : { durationMs: attachment.durationMs }),
+        })
+      } catch {
+        // 语音回复失败静默降级：文字回复已就绪，不阻断会话。
+      }
+    })()
+  })
+
   /** Remove a wait before settling it: synchronous deletion makes the first claimant win. */
   function claimQuestion(pending: PendingQuestion, outcome: 'answered' | 'cancelled'): void {
     pendingQuestions.delete(pending.rpcId)
@@ -2208,18 +2439,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
                 ? {}
                 : { reasoningEffort: ReasoningEffortId(reasoningEffort) },
             })
-            const pendingImage = [...found.agent.inbox.nextTurn, ...found.agent.inbox.nextStep]
-              .some(message => contentHasImage(message.content))
-            if (pendingImage || messagesHaveImage(found.agent.session.deriveMessages())) {
-              const info = await ctx.llm.resolveModelInfo(resolved.provider, resolved.model)
-              if (info.inputModalities !== undefined && !info.inputModalities.includes('image')) {
-                return err(request, {
-                  code: 'model-unavailable',
-                  message: `Model "${resolved.model}" does not accept image input, but this session already contains images; select an image-capable model.`,
-                  details: { provider, model },
-                })
-              }
-            }
+            // [本地改造 2026-08-16] 移除官方"模型不支持图片就拒绝切换"的检查：
+            // 本部署图片/语音与模型原生能力解耦——llm-deepseek serialize.ts 把
+            // image/voice 块转文本（本地路径/ASR 文本），识图走视觉 MCP（look），
+            // 图片从不直接进模型。因此 inputModalities 不含 image 的模型
+            // （如 deepseek-v4-flash）在含图会话里同样可以正常切换使用。
             const selected: ModelSelection = {
               provider: resolved.provider,
               model: resolved.model,
@@ -2396,23 +2620,23 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           ...(canonicalTimeZone === undefined ? {} : { clientTimeZone: canonicalTimeZone }),
         }
         const hasImage = content.some(part => part.type === 'image')
+        const hasVoice = content.some(part => part.type === 'voice')
         const admit = async (): Promise<RpcResponse<{ accepted: true }>> => {
           try {
-            if (hasImage) {
-              const current = selectionFor(agent).current
-              const modelInfo = await ctx.llm.resolveModelInfo(current.provider, current.model)
-              if (modelInfo.inputModalities !== undefined && !modelInfo.inputModalities.includes('image')) {
-                return err(request, {
-                  code: 'attachment-error',
-                  message: `Model "${current.model}" does not support image input.`,
-                  details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
-                })
-              }
-            }
+            // [本地改造 2026-08-16] 完全放行图片（参考 dsh-vscode-layout 补丁）：
+            // 图片进用户消息正常显示；llm-deepseek 序列化时把图片块转为本地附件路径文本，
+            // agent 用视觉 MCP（look）识图——不再按模型是否支持图片拦截。
             const durable = await durablePromptContent(ctx, content)
             const message: UserMessage = createUserMessage({ content: durable, source })
-            if (mode === 'steer') agent.steer(message)
-            else agent.followup(message)
+            if (mode === 'steer') {
+              agent.steer(message)
+            } else {
+              // [本地改造 2026-08-16] 语音消息与文本/图片一样走正常 followup：voice
+              // 块立即入队上屏（前端语音卡片可播放），agent 唤醒后从序列化文本拿到
+              // 本地语音路径，主动调本地 ASR 工具识别——识别结果在助手侧显示。
+              // host 不再后台转写后二次注入"用户身份"的识别文本。
+              agent.followup(message)
+            }
           } catch (error: unknown) {
             if (error instanceof AttachmentError) {
               return err(request, {
@@ -2429,7 +2653,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           }
           return ok(request, { accepted: true as const })
         }
-        return hasImage ? serializeImageAdmission(agent, admit) : admit()
+        return hasImage || hasVoice ? serializeImageAdmission(agent, admit) : admit()
       },
 
       async attachment(request) {
@@ -2476,6 +2700,129 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           return err(request, {
             code: 'internal',
             message: 'Unable to read image attachment.',
+            details: {},
+          })
+        }
+      },
+
+      async voice(request) {
+        const { sessionId, voiceId } = request.payload
+        console.error(`[voice-rpc-debug] voice called sessionId=${sessionId} voiceId=${voiceId}`)
+        let state: SessionReadState
+        try {
+          state = await readSessionState(sessionId)
+        } catch (error: unknown) {
+          if (error instanceof SessionNotFound) {
+            return err(request, {
+              code: 'session-not-found',
+              message: error.message,
+              details: { sessionId },
+            })
+          }
+          return err(request, {
+            code: 'internal',
+            message: `voice authorization unavailable for session "${sessionId}": ${String(error)}`,
+            details: {},
+          })
+        }
+        const ref = referencedVoice(state.events, voiceId)
+        if (ref === undefined) {
+          return err(request, {
+            code: 'attachment-error',
+            message: 'Voice object is not referenced by this session.',
+            details: { reason: 'VOICE_NOT_REFERENCED' },
+          })
+        }
+        try {
+          const stored = await readVoiceFile(voiceStorageRoot(), ref)
+          return ok(request, {
+            attachment: stored.ref,
+            data: Buffer.from(stored.data).toString('base64'),
+          })
+        } catch {
+          return err(request, {
+            code: 'internal',
+            message: 'Unable to read voice object.',
+            details: {},
+          })
+        }
+      },
+
+      async voiceAsr(request) {
+        // On-the-fly transcription for the "speak-to-text" gesture: decode the
+        // recording to a temp file, transcribe, and remove it — nothing durable.
+        const { data } = request.payload
+        let tempPath: string | undefined
+        try {
+          const bytes = decodeBase64(data)
+          tempPath = join(process.env.TEMP ?? '/tmp', `dsh-asr-in-${randomUUID()}`)
+          await writeFile(tempPath, bytes)
+          const text = await transcribeVoice(tempPath)
+          return ok(request, { text: text === '' ? null : text })
+        } catch {
+          return ok(request, { text: null })
+        } finally {
+          if (tempPath !== undefined) await rm(tempPath, { force: true }).catch(() => {})
+        }
+      },
+
+      async voiceTts(request) {
+        // Local TTS through the agents-to-im engine: synthesize to mp3 (the
+        // browser-universal format), read the bytes back, and return them
+        // inline — nothing durable, the reply plays locally.
+        const { text, provider } = request.payload
+        try {
+          const audio = await synthesizeReplyVoice(text, provider)
+          if (audio === null) return ok(request, null)
+          return ok(request, {
+            mediaType: audio.mediaType,
+            data: Buffer.from(audio.data).toString('base64'),
+            ...(audio.durationMs === undefined ? {} : { durationMs: audio.durationMs }),
+          })
+        } catch {
+          return ok(request, null)
+        }
+      },
+
+      async sendVoiceMessage(request) {
+        // [本地改造 2026-08-16] 主动发语音消息：合成 TTS → 落盘 → 追加 voice/reply
+        // 事件（独立持久语音横条）。agent 通过本 RPC 可以主动给用户发语音。
+        const { sessionId, text, provider } = request.payload
+        try {
+          const audio = await synthesizeReplyVoice(text, provider)
+          if (audio === null) {
+            return err(request, {
+              code: 'internal',
+              message: 'voice synthesis failed',
+              details: {},
+            })
+          }
+          const attachment = await saveVoiceFile(
+            voiceStorageRoot(), audio.data, audio.mediaType as never, audio.durationMs,
+          )
+          const agent = ctx.agents.get(sessionId)
+          if (agent === undefined || agent.session.id !== sessionId) {
+            return err(request, {
+              code: 'session-not-found',
+              message: 'no attached session for sendVoiceMessage',
+              details: { sessionId },
+            })
+          }
+          const turn = agent.session.events
+            .filter((event): event is SessionEvent & { type: 'turn/start' } => event.type === 'turn/start')
+            .at(-1)?.data.turn ?? 0
+          agent.session.append('voice/reply', {
+            turn,
+            voiceId: attachment.voiceId,
+            mediaType: attachment.mediaType,
+            bytes: attachment.bytes,
+            ...(attachment.durationMs === undefined ? {} : { durationMs: attachment.durationMs }),
+          })
+          return ok(request, { accepted: true as const })
+        } catch {
+          return err(request, {
+            code: 'internal',
+            message: 'sendVoiceMessage failed',
             details: {},
           })
         }
@@ -3337,6 +3684,25 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             details: { settingsNs, ...baseURL === undefined ? {} : { baseURL } },
           })
         }
+      },
+    },
+
+    balance: {
+      async get(request) {
+        // [本地改造 2026-08-16] 余额指示只对 deepseek 直连模型显示：
+        // 调用方带上 sessionId 时，检查该会话当前 provider；非
+        // deepseek-official（如 qwen 百炼）直接返回 null，前端据此隐藏。
+        const { sessionId } = request.payload
+        if (sessionId !== undefined) {
+          const found = await agentFor(sessionId)
+          if (!('error' in found)) {
+            const current = selectionFor(found.agent).current
+            if (current.provider !== 'deepseek-official') {
+              return ok(request, { balance: null })
+            }
+          }
+        }
+        return ok(request, { balance: await readDeepSeekBalance(ctx) })
       },
     },
 

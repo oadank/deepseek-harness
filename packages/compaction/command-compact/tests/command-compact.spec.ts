@@ -163,7 +163,7 @@ describe('@deepseek-ai/dsh-command-compact registration', () => {
     expect(loader.unwrapExports(commandCompact)).toBe(commandCompact)
     expect(test.ctx.commands.list(test.agent)).toContainEqual({
       name: 'compact',
-      description: 'Compact older conversation history',
+      description: '压缩较早的对话历史',
     })
 
     await test.plugin.dispose()
@@ -178,7 +178,7 @@ describe('/compact human command', () => {
     const execution = await run(test, '', controller)
     expect(execution.result).toEqual({
       kind: 'success',
-      text: 'Compacted 3 history items (~42 tokens).',
+      text: '已压缩 3 条历史（约 42 tokens）。',
       sourceEventSeq: RESULT.summarySeq,
     })
     expect(execution.commandId).toBe(expectLastLifecycle(test, '', execution.result))
@@ -191,26 +191,26 @@ describe('/compact human command', () => {
     const empty = await run(test)
     expect(empty.result).toEqual({
       kind: 'success',
-      text: 'No compactable history yet.',
+      text: '暂无可以压缩的历史。',
     })
     expect(empty.commandId).toBe(expectLastLifecycle(test, '', empty.result))
 
     const rejected = await run(test, ' now')
     expect(rejected.result).toEqual({
       kind: 'error',
-      text: 'Usage: /compact (no arguments)',
+      text: '用法：/compact（无参数）',
     })
     expect(rejected.commandId).toBe(expectLastLifecycle(test, ' now', rejected.result))
     expect(test.compact.calls).toHaveLength(1)
   })
 
   it.each([
-    ['busy', 'Compaction is unavailable because this process has an active compaction, or the agent is not idle.'],
-    ['cancelled', 'Compaction cancelled.'],
-    ['changed', 'The history selected for compaction changed before it could be replaced. The conversation is unchanged; the attempt is recorded in the session log.'],
-    ['summary', 'Compaction could not produce a useful summary. The conversation is unchanged; the attempt is recorded in the session log.'],
-    ['commit', 'Compaction did not finish cleanly; some session history may have changed. Inspect the current session state before retrying.'],
-    ['persistence', 'Compaction finished, but the session could not be saved.'],
+    ['busy', '压缩暂不可用：当前进程正在进行压缩，或智能体未处于空闲状态。'],
+    ['cancelled', '压缩已取消。'],
+    ['changed', '待压缩的历史在替换前发生了变化。对话保持不变；该次尝试已记录在会话日志中。'],
+    ['summary', '压缩未能生成有效摘要。对话保持不变；该次尝试已记录在会话日志中。'],
+    ['commit', '压缩未能干净结束；部分会话历史可能已变化。重试前请检查当前会话状态。'],
+    ['persistence', '压缩已完成，但会话未能保存。'],
   ] as const)('maps expected %s failures to direct errors', async (code, text) => {
     const test = await harness()
     test.compact.failure = new ManualCompactionError(code, 'backend detail')

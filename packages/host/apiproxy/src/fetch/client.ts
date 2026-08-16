@@ -30,6 +30,10 @@ import {
   sessionSearchValueSchema,
   sessionSelectModelValueSchema,
   sessionUpdateQueueValueSchema,
+  sessionVoiceAsrValueSchema,
+  sessionVoiceTtsValueSchema,
+  sessionVoiceValueSchema,
+  sessionSendVoiceMessageValueSchema,
 } from '../api/sessions.schema.ts'
 import {
   workspaceArchiveSessionValueSchema,
@@ -61,6 +65,7 @@ import {
   credentialsDescribeValueSchema, credentialsSetValueSchema, credentialsUnsetValueSchema,
 } from '../api/credentials.schema.ts'
 import { llmDiscoverModelsValueSchema, llmModelsValueSchema, llmProvidersValueSchema } from '../api/llm.schema.ts'
+import { balanceGetValueSchema } from '../api/balance.schema.ts'
 import {
   subagentHistoryValueSchema,
   subagentInterruptValueSchema,
@@ -96,6 +101,10 @@ export interface IApiClient {
     fork(payload: RequestPayload<'session.fork'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.fork'>>>
     prompt(payload: RequestPayload<'session.prompt'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.prompt'>>>
     attachment(payload: RequestPayload<'session.attachment'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.attachment'>>>
+    voice(payload: RequestPayload<'session.voice'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.voice'>>>
+    voiceAsr(payload: RequestPayload<'session.voiceAsr'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.voiceAsr'>>>
+    voiceTts(payload: RequestPayload<'session.voiceTts'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.voiceTts'>>>
+    sendVoiceMessage(payload: RequestPayload<'session.sendVoiceMessage'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.sendVoiceMessage'>>>
     updateQueue(payload: RequestPayload<'session.updateQueue'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.updateQueue'>>>
     cancel(payload: RequestPayload<'session.cancel'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.cancel'>>>
   }
@@ -161,6 +170,9 @@ export interface IApiClient {
     models(payload: RequestPayload<'llm.models'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.models'>>>
     discoverModels(payload: RequestPayload<'llm.discoverModels'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.discoverModels'>>>
   }
+  balance: {
+    get(payload: RequestPayload<'balance.get'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'balance.get'>>>
+  }
   /** client-response passthrough (rpcId is a backfill of the server-request's id — never minted here). */
   respond(message: ClientResponse, signal?: AbortSignal): Promise<RpcReceipt>
 }
@@ -180,6 +192,10 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
   'session.fork': sessionForkValueSchema,
   'session.prompt': sessionPromptValueSchema,
   'session.attachment': sessionAttachmentValueSchema,
+  'session.voice': sessionVoiceValueSchema,
+  'session.voiceAsr': sessionVoiceAsrValueSchema,
+  'session.voiceTts': sessionVoiceTtsValueSchema,
+  'session.sendVoiceMessage': sessionSendVoiceMessageValueSchema,
   'session.updateQueue': sessionUpdateQueueValueSchema,
   'session.cancel': sessionCancelValueSchema,
   'subagent.list': subagentListValueSchema,
@@ -222,6 +238,7 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
   'llm.providers': llmProvidersValueSchema,
   'llm.models': llmModelsValueSchema,
   'llm.discoverModels': llmDiscoverModelsValueSchema,
+  'balance.get': balanceGetValueSchema,
 }
 
 /** Default timeout for bounded unary calls (rpc-compare 2026-07-19: a hung host must not leave callers pending forever). */
@@ -420,6 +437,10 @@ export abstract class AbstractApiClient implements IApiClient {
     fork: (payload, signal) => this.callUnary('session.fork', payload, signal),
     prompt: (payload, signal) => this.callUnary('session.prompt', payload, signal),
     attachment: (payload, signal) => this.callUnary('session.attachment', payload, signal),
+    voice: (payload, signal) => this.callUnary('session.voice', payload, signal),
+    voiceAsr: (payload, signal) => this.callUnary('session.voiceAsr', payload, signal),
+    voiceTts: (payload, signal) => this.callUnary('session.voiceTts', payload, signal),
+    sendVoiceMessage: (payload, signal) => this.callUnary('session.sendVoiceMessage', payload, signal),
     updateQueue: (payload, signal) => this.callUnary('session.updateQueue', payload, signal),
     cancel: (payload, signal) => this.callUnary('session.cancel', payload, signal),
   }
@@ -498,6 +519,10 @@ export abstract class AbstractApiClient implements IApiClient {
     providers: (payload, signal) => this.callUnary('llm.providers', payload, signal),
     models: (payload, signal) => this.callUnary('llm.models', payload, signal),
     discoverModels: (payload, signal) => this.callUnary('llm.discoverModels', payload, signal),
+  }
+
+  readonly balance: IApiClient['balance'] = {
+    get: (payload, signal) => this.callUnary('balance.get', payload, signal),
   }
 
   readonly events: IApiClient['events'] = {

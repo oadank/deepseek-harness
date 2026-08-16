@@ -38,17 +38,17 @@
 - button "Branch into a new conversation":
   - img
 - text: 7/25 {{clock}} Ran for {{duration}} TTFT {{duration}} {{throughput}} tok/s
-- button "compact Compacted 5 history items (~{{tokens}} tokens)"
+- button "compact 已压缩 5 条历史（约 {{tokens}} tokens）"
 - button "Context injection AGENTS.md":
   - img
   - img
   - text: Context injection AGENTS.md
 - img
-- text: permission preset read-only
-- 'button "feedback Feedback recorded for session {{seededId}} Anonymous user: {{uuid}}. Session sharing is not configured." [expanded]':
+- text: permission 已切换预设：read-only
+- 'button "feedback 已记录对会话 {{seededId}} 的反馈 匿名用户：{{uuid}}。会话共享未配置。" [expanded]':
   - img
-  - text: "feedback Feedback recorded for session {{seededId}} Anonymous user: {{uuid}}. Session sharing is not configured."
-- text: "Feedback recorded for session {{seededId}} Anonymous user: {{uuid}}. Session sharing is not configured."
+  - text: "feedback 已记录对会话 {{seededId}} 的反馈 匿名用户：{{uuid}}。会话共享未配置。"
+- text: "已记录对会话 {{seededId}} 的反馈 匿名用户：{{uuid}}。会话共享未配置。"
 - textbox "Message the agent"
 - button "Commands":
   - img

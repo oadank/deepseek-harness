@@ -10,7 +10,7 @@ import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands
 export const name = 'command-compact'
 export const inject = ['commands', 'compaction']
 
-const USAGE = 'Usage: /compact (no arguments)'
+const USAGE = '用法：/compact（无参数）'
 
 /** Fail loudly if a locally closed union gains an unhandled member. */
 /* v8 ignore start -- closed-union backstop is unreachable without violating the TypeScript contract */
@@ -25,29 +25,29 @@ function expectedFailure(error: ManualCompactionError): CommandResult {
     case 'busy':
       return {
         kind: 'error',
-        text: 'Compaction is unavailable because this process has an active compaction, or the agent is not idle.',
+        text: '压缩暂不可用：当前进程正在进行压缩，或智能体未处于空闲状态。',
       }
     case 'cancelled':
-      return { kind: 'error', text: 'Compaction cancelled.' }
+      return { kind: 'error', text: '压缩已取消。' }
     case 'changed':
       return {
         kind: 'error',
-        text: 'The history selected for compaction changed before it could be replaced. The conversation is unchanged; the attempt is recorded in the session log.',
+        text: '待压缩的历史在替换前发生了变化。对话保持不变；该次尝试已记录在会话日志中。',
       }
     case 'summary':
       return {
         kind: 'error',
-        text: 'Compaction could not produce a useful summary. The conversation is unchanged; the attempt is recorded in the session log.',
+        text: '压缩未能生成有效摘要。对话保持不变；该次尝试已记录在会话日志中。',
       }
     case 'commit':
       return {
         kind: 'error',
-        text: 'Compaction did not finish cleanly; some session history may have changed. Inspect the current session state before retrying.',
+        text: '压缩未能干净结束；部分会话历史可能已变化。重试前请检查当前会话状态。',
       }
     case 'persistence':
       return {
         kind: 'error',
-        text: 'Compaction finished, but the session could not be saved.',
+        text: '压缩已完成，但会话未能保存。',
       }
     /* v8 ignore next 2 -- ManualCompactionErrorCode is closed and every member is handled above */
     default: return assertNever(error.code)
@@ -64,14 +64,14 @@ async function executeCompact(
   }
   try {
     const result = await ctx.compaction.compactNow(invocation.agent, invocation.signal, invocation.commandId)
-    if (result === null) return { kind: 'success', text: 'No compactable history yet.' }
+    if (result === null) return { kind: 'success', text: '暂无可以压缩的历史。' }
     return {
       kind: 'success',
-      text: `Compacted ${result.shadowedSeqs.length} history items (~${result.shadowedTokenCount} tokens).`,
+      text: `已压缩 ${result.shadowedSeqs.length} 条历史（约 ${result.shadowedTokenCount} tokens）。`,
       sourceEventSeq: result.summarySeq,
     }
   } catch (error: unknown) {
-    if (invocation.signal.aborted) return { kind: 'error', text: 'Compaction cancelled.' }
+    if (invocation.signal.aborted) return { kind: 'error', text: '压缩已取消。' }
     if (error instanceof ManualCompactionError) return expectedFailure(error)
     throw error
   }
@@ -99,7 +99,7 @@ export function apply(ctx: Context): void {
     yield async () => { await Promise.allSettled(active) }
     yield ctx.commands.register({
       name: 'compact',
-      description: 'Compact older conversation history',
+      description: '压缩较早的对话历史',
       handler,
     })
   }, 'command-compact lifecycle')

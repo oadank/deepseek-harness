@@ -1,0 +1,43 @@
+/* Synthesized voice-reply pill (voice-iron-rule): left-aligned row under the
+   last assistant message, mirroring the user voice card's playback chrome. */
+
+.card {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 16px 0 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 22px;
+  background: var(--dsw-alias-markdown-code-block);
+}
+
+.play {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-specific-selector);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.play:hover {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+.duration {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 20px;
+}

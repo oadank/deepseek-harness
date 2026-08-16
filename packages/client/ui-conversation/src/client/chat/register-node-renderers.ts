@@ -7,6 +7,7 @@ import {
   TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
 } from './MessageItem.tsx'
 import { TurnTailNodeView } from './TurnTailNodeView.tsx'
+import { VoiceReplyNodeView } from './VoiceReplyNodeView.tsx'
 
 /**
  * Register this package's business renderers behind the keyed Chat Node seat.
@@ -46,6 +47,8 @@ export function registerChatNodeRenderers(ctx: Context): void {
       'conversation.chat.assistant-actions': { kind: 'list', scope: 'session' },
     },
   }, TurnTailNodeView))
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+    { name: 'conversation.chat.node', key: 'voice-reply', locale: NS }, VoiceReplyNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
     { name: 'conversation.chat.node', key: 'unknown', locale: NS }, UnknownNodeView))
 }

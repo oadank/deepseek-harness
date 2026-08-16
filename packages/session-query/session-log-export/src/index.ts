@@ -8,7 +8,7 @@ export const inject = ['commands']
 
 const REQUESTED: CommandResult = {
   kind: 'success',
-  text: 'Session log download requested.',
+  text: '已请求下载会话日志。',
 }
 
 /**
@@ -18,9 +18,9 @@ const REQUESTED: CommandResult = {
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.commands.register({
     name: 'export',
-    description: 'Download this Session log as a ZIP archive',
+    description: '下载本会话日志（ZIP 压缩包）',
     handler: invocation => Promise.resolve(invocation.rawInput.trim() === ''
       ? REQUESTED
-      : { kind: 'error', text: 'The Web /export command does not accept a path.' }),
+      : { kind: 'error', text: 'Web 端 /export 命令不接受路径参数。' }),
   }), 'session-log-download: command')
 }

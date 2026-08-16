@@ -9,7 +9,7 @@
  */
 import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {
-  MessageId, PromptContentPart, QueueAction, RpcResult, SessionId,
+  MessageId, PromptContentPart, QueueAction, RpcResult, SessionId, VoiceAttachmentRef,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { ConversationSnapshot } from '../sessions/conversation.ts'
@@ -51,6 +51,14 @@ export interface ISession {
   readAttachment(
     attachmentId: AttachmentIdType,
   ): Promise<RpcResult<{ attachment: ImageAttachmentRef; data: Uint8Array }>>
+  /**
+   * Resolve one durable voice object referenced by this session.
+   * @param voiceId - opaque id found in the folded session log.
+   * @returns the authenticated reference and decoded bytes.
+   */
+  readVoice(
+    voiceId: string,
+  ): Promise<RpcResult<{ attachment: VoiceAttachmentRef; data: Uint8Array }>>
   /**
    * Apply one edit, remove, or strict steer action to a still-pending queue occurrence.
    * @param itemId - agent-owned inbox occurrence identity.

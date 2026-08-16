@@ -167,11 +167,11 @@ export class PermissionPresetService extends Service {
     })).default({
       'workspace-write': {
         sandbox: 'workspace-write', approval: 'ask',
-        name: 'workspace-write', description: 'Write inside the workspace and permitted temporary directories; wider retries require approval.',
+        name: 'workspace-write', description: '在 workspace 及允许的临时目录内写入；更广范围的请求需要审批。',
       },
       'danger-full-access': {
         sandbox: 'danger-full-access', approval: 'never',
-        name: 'danger-full-access', description: 'Full file access without approval prompts.',
+        name: 'danger-full-access', description: '无审批提示的完全文件访问。',
       },
     }),
     defaultPreset: z.string(),
@@ -257,21 +257,21 @@ export class PermissionPresetService extends Service {
     ctx.inject(['commands'], (commandCtx) => {
       commandCtx.commands.register({
         name: 'permission',
-        description: 'Switch the permission preset (sandbox mode + approval policy)',
-        input: { hint: '<preset>' },
+        description: '切换权限预设（沙箱模式 + 审批策略）',
+        input: { hint: '<预设>' },
         // No settlement text labels its value with this command's own name: a
         // surface that renders `name · text` (the web command row) would
         // otherwise read `permission · Permission preset: workspace-write.`
         handler: ({ agent, rawInput }) => {
           const name = rawInput.trim()
           if (name === '') {
-            return { kind: 'success', text: `current preset ${this.current(agent.session.events)} (available: ${this.names.join(', ')})` }
+            return { kind: 'success', text: `当前预设：${this.current(agent.session.events)}（可用：${this.names.join(', ')}）` }
           }
           if (!this.names.includes(name)) {
-            return { kind: 'error', text: `unknown preset "${name}" (available: ${this.names.join(', ')})` }
+            return { kind: 'error', text: `未知预设 "${name}"（可用：${this.names.join(', ')}）` }
           }
           this.apply(agent.session, name, (policy) =>{  this.ctx.approval.setPolicy(agent, policy) })
-          return { kind: 'success', text: `preset ${name}` }
+          return { kind: 'success', text: `已切换预设：${name}` }
         },
       })
     })
@@ -360,7 +360,7 @@ export class PermissionPresetService extends Service {
    */
   optionOf(name: string): PresetOption {
     if (name === CUSTOM_PRESET) {
-      return { value: CUSTOM_PRESET, name: 'Custom', description: 'Current sandbox and approval settings do not match a preset.' }
+      return { value: CUSTOM_PRESET, name: '自定义', description: '当前沙箱与审批设置不匹配任何预设。' }
     }
     const spec = this.resolve(name)
     return { value: name, name: spec.name ?? name, ...spec.description !== undefined ? { description: spec.description } : {} }

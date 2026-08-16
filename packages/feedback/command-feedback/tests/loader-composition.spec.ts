@@ -93,12 +93,12 @@ describe('/feedback real Loader composition through cordis.yml', () => {
     const userId = getOrCreateAnonymousUserId({ env: { DSH_HOME: root } })
     expect(accepted?.result).toEqual({
       kind: 'success',
-      text: `Feedback recorded for session feedback-loader-agent\nAnonymous user: ${userId}. Session sharing is not configured.`,
+      text: `已记录对会话 feedback-loader-agent 的反馈\n匿名用户：${userId}。会话共享未配置。`,
     })
     const rejected = await context.commands.execute(owner, '/feedback', [], signal)
     expect(rejected?.result).toEqual({
       kind: 'error',
-      text: 'Feedback text is required. Usage: /feedback <text>',
+      text: '请输入反馈内容。用法：/feedback <内容>',
     })
 
     // The domain event owns the payload; generic command bookkeeping omits it.

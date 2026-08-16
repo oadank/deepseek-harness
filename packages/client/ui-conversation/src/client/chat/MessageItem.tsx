@@ -3,11 +3,12 @@
 // assistant answers), pending steering (copy only), context injection,
 // compaction marker, retry disclosure, and unknown-surface JSON rows.
 
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
   ModelRetryNode, TurnErrorNode, UserMessageNode,
 } from '@deepseek-ai/dsh-client-runtime/client'
+import type { VoiceAttachmentRef } from '@deepseek-ai/dsh-client-connection/client'
 import { JsonBlock, MessageText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
 import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
@@ -17,14 +18,17 @@ import { MessageIconActions } from './MessageIconActions.tsx'
 import css from './MessageItem.module.css'
 
 type UserImage = Extract<UserMessageNode['content'][number], { type: 'image' }>
+type UserVoice = Extract<UserMessageNode['content'][number], { type: 'voice' }>
 
 function contentParts(content: readonly unknown[]): {
   text: string
   images: { attachment: UserImage['attachment'] }[]
+  voices: { attachment: UserVoice['attachment'] }[]
   rest: unknown[]
 } {
   const texts: string[] = []
   const images: { attachment: UserImage['attachment'] }[] = []
+  const voices: { attachment: UserVoice['attachment'] }[] = []
   const rest: unknown[] = []
   for (const block of content) {
     const b = block as { type?: string; text?: string; attachment?: unknown }
@@ -32,9 +36,12 @@ function contentParts(content: readonly unknown[]): {
     else if (b.type === 'image' && b.attachment !== undefined) {
       images.push({ attachment: (b as UserImage).attachment })
     }
+    else if (b.type === 'voice' && b.attachment !== undefined) {
+      voices.push({ attachment: (b as UserVoice).attachment })
+    }
     else rest.push(block)
   }
-  return { text: texts.join(''), images, rest }
+  return { text: texts.join(''), images, voices, rest }
 }
 
 function retrySeconds(milliseconds: number): number {
@@ -212,12 +219,90 @@ function projectUserText(text: string, sessionLabels: readonly string[]): ReactN
   return <>{parts}</>
 }
 
+/** Right-aligned voice message card: session-authorized playback with duration. */
+export function VoiceCard({ attachment, load, t }: {
+  attachment: VoiceAttachmentRef
+  load?: (ref: VoiceAttachmentRef) => Promise<string>
+  t: ChatViewSlotProps['t']
+}) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [playing, setPlaying] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setFailed(false)
+    setUrl(null)
+    // A missing loader (deployment without the voice channel) degrades to the
+    // disabled card rather than crashing the whole message row.
+    if (load === undefined) {
+      setFailed(true)
+      return () => { cancelled = true }
+    }
+    load(attachment).then((next) => {
+      if (!cancelled) setUrl(next)
+    }, () => {
+      if (!cancelled) setFailed(true)
+    })
+    return () => { cancelled = true }
+  }, [attachment, load])
+  const toggle = (): void => {
+    const audio = audioRef.current
+    if (audio === null) return
+    if (playing) audio.pause()
+    else void audio.play().catch(() => { setFailed(true) })
+  }
+  const seconds = attachment.durationMs !== undefined
+    ? Math.max(1, Math.ceil(attachment.durationMs / 1_000))
+    : null
+  return (
+    <div className={css.voiceCard} data-voice>
+      <button
+        type="button"
+        className={css.voicePlay}
+        aria-label={playing ? t('voice.pause') : t('voice.play')}
+        disabled={failed}
+        onClick={toggle}
+      >
+        {playing
+          ? (
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+              <rect x="3.5" y="3.5" width="3" height="9" rx="1" fill="currentColor"/>
+              <rect x="9.5" y="3.5" width="3" height="9" rx="1" fill="currentColor"/>
+            </svg>
+          )
+          : (
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+              <path d="M5 3.5L12.5 8L5 12.5V3.5Z" fill="currentColor"/>
+            </svg>
+          )}
+      </button>
+      <span className={css.voiceDuration}>{seconds === null ? '' : `${seconds}s`}</span>
+      {attachment.transcript !== undefined && attachment.transcript !== '' && (
+        <span className={css.voiceTranscript} title={t('voice.transcriptLabel')}>
+          {attachment.transcript}
+        </span>
+      )}
+      {url !== null && (
+        <audio
+          ref={audioRef}
+          src={url}
+          onPlay={() => { setPlaying(true) }}
+          onPause={() => { setPlaying(false) }}
+          onEnded={() => { setPlaying(false) }}
+        />
+      )}
+    </div>
+  )
+}
+
 /** Right-aligned bubble shared by user and steering rows. */
 function UserStyleBubble({
-  content, renderMessageImages, actions, pending = false, referenceLabels = [], t,
+  content, renderMessageImages, voiceLoader, actions, pending = false, referenceLabels = [], t,
 }: {
   content: readonly unknown[]
   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
+  voiceLoader: (ref: VoiceAttachmentRef) => Promise<string>
   /** Optional IconActions (or similar) below the bubble; receives the joined text. */
   actions?: (text: string) => ReactNode
   /** Whether this is the Host-authoritative pre-admission steering projection. */
@@ -226,13 +311,14 @@ function UserStyleBubble({
   referenceLabels?: readonly string[]
   t: ChatViewSlotProps['t']
 }): ReactNode {
-  const { text, images, rest } = contentParts(content)
+  const { text, images, voices, rest } = contentParts(content)
   const truncated = (total: number): string => t('json.truncated', { total })
   const showBubble = text !== '' || rest.length > 0
   return (
     <div className={css.userRow} data-pending-steering={pending || undefined} data-time-hover-root>
       <div className={css.userStack}>
         {renderMessageImages({ images, align: 'end' })}
+        {voices.map((voice, i) => <VoiceCard key={i} attachment={voice.attachment} load={voiceLoader} t={t} />)}
         {showBubble && <div className={css.bubble}>
           {projectUserText(text, referenceLabels)}
           {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
@@ -254,15 +340,18 @@ function UserStyleBubble({
  * @param props - Pending message content and conversation translator.
  * @returns the pending steering bubble.
  */
-export function PendingSteeringBubble({ content, renderMessageImages, t }: {
+export function PendingSteeringBubble({ content, renderMessageImages, loadVoice, t }: {
   content: readonly unknown[]
   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
+  loadVoice?: (ref: VoiceAttachmentRef) => Promise<string>
   t: ChatViewSlotProps['t']
 }): ReactNode {
+  const voiceLoader = loadVoice ?? (() => Promise.reject(new Error(t('voice.loadFailed'))))
   return (
     <UserStyleBubble
       content={content}
       renderMessageImages={renderMessageImages}
+      voiceLoader={voiceLoader}
       pending
       t={t}
       actions={text => (
@@ -279,13 +368,14 @@ export function PendingSteeringBubble({ content, renderMessageImages, t }: {
 
 /** User and admitted-steering keyed Chat renderer. */
 export const UserMessageNodeView = memo(function UserMessageNodeView({
-  node, renderMessageImages, t,
+  node, renderMessageImages, loadVoice, t,
 }: ChatNodeViewProps<'user' | 'steering'>) {
   const data = node.data
   return (
     <UserStyleBubble
       content={data.content}
       renderMessageImages={renderMessageImages}
+      voiceLoader={loadVoice}
       {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
       t={t}
       actions={text => (
@@ -304,6 +394,10 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
 /** Injected-context keyed Chat renderer. */
 export const ContextMessageNodeView = memo(function ContextMessageNodeView({ node, t }: ChatNodeViewProps<'context'>) {
   const data = node.data
+  // [本地改造 2026-08-16] 隐藏 vision-qa 图片识别的注入行：识别在后台完成，用户无感知
+  // （消息仍在会话日志、模型可见；用户只看到自己的图片消息与助手回复——正常图片交互）
+  const src = data.source as { kind?: string; plugin?: string } | null
+  if (src?.kind === 'plugin' && src.plugin === 'vision-qa') return null
   return (
     <ContextInjectionRow
       content={data.content}

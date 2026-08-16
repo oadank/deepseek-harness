@@ -30,10 +30,10 @@
 - button "Branch into a new conversation":
   - img
 - text: {{clock}} Ran for {{duration}} TTFT {{duration}} {{throughput}} tok/s
-- 'button "feedback Feedback recorded for session session-{{uuid}} Anonymous user: {{uuid}}. Session sharing is enabled."':
+- 'button "feedback 已记录对会话 session-{{uuid}} 的反馈 匿名用户：{{uuid}}。会话共享已开启。"':
   - img
   - img
-  - text: "feedback Feedback recorded for session session-{{uuid}} Anonymous user: {{uuid}}. Session sharing is enabled."
+  - text: "feedback 已记录对会话 session-{{uuid}} 的反馈 匿名用户：{{uuid}}。会话共享已开启。"
 - textbox "Message the agent"
 - button "Commands":
   - img

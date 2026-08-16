@@ -10,10 +10,10 @@
     - tab "Chat" [selected]
     - tab "Trajectory"
 - group "Command input": /goal
-- 'button "goal No goal is currently set. Usage: /goal [<objective>|clear|edit <objective>|pause|resume]"':
+- 'button "goal 当前未设置目标。用法：/goal [<目标>|clear|edit <目标>|pause|resume]"':
   - img
   - img
-  - text: "goal No goal is currently set. Usage: /goal [<objective>|clear|edit <objective>|pause|resume]"
+  - text: "goal 当前未设置目标。用法：/goal [<目标>|clear|edit <目标>|pause|resume]"
 - textbox "Message the agent"
 - button "Commands":
   - img

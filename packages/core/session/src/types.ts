@@ -334,6 +334,23 @@ export interface SessionEventMap {
    * so tolerating concurrent writers needs a signal beyond the log.
    */
   'session/end-seed': Record<string, never>
+  /**
+   * [本地改造 2026-08-16] 助手侧语音回复：turn 完成后 host 把最后一条助手文本
+   * 合成 TTS 并落盘，作为一条独立持久语音消息（与用户语音消息同级）。前端
+   * 渲染为单独语音横条（复用 VoiceCard）。log-only：不进入模型历史重建。
+   */
+  'voice/reply': {
+    /** The turn whose closing assistant text this reply speaks. */
+    turn: number
+    /** Opaque storage identifier of the synthesized audio object. */
+    voiceId: string
+    /** Audio container format of the stored object. */
+    mediaType: string
+    /** Exact encoded byte length. */
+    bytes: number
+    /** Recorder-style duration in milliseconds. */
+    durationMs?: number
+  }
 }
 
 /** The appendable event-type keys of {@link SessionEventMap}, plugin-merged extensions included. */

@@ -219,20 +219,113 @@ export function apply(ctx: Context, config: AcpConfig): void {
   // plans, titles, and retry markers are presentation or trace data and stay
   // off the automation wire. One per-session chain preserves block/message
   // order across asynchronous attachment reads.
+  // [本地改造延续] thinking/工具事件推送见下方 session/event handler
+  // （reasoning-delta → agent_thought_chunk、tool_call/tool_call_update 等）。
   ctx.on('session/event', (session, event: SessionEvent) => {
     const record = sessions.get(session.header.id)
     if (record === undefined || record.agent.session !== session) return
     try {
+      // 流式思考/正文增量：assistant/chunk → reasoning-delta / text-delta
+      if (event.type === 'assistant/chunk') {
+        const chunk = event.data.chunk
+        if (chunk.type === 'reasoning-delta' && chunk.text.length > 0) {
+          notify({
+            sessionId: record.agent.session.id,
+            update: {
+              sessionUpdate: 'agent_thought_chunk',
+              content: { type: 'text', text: chunk.text },
+            },
+          })
+        } else if (chunk.type === 'text-delta' && chunk.text.length > 0) {
+          notify({
+            sessionId: record.agent.session.id,
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: chunk.text },
+            },
+          })
+        }
+      }
+      // 工具调用开始：tool/call → tool_call（status:running）
+      if (event.type === 'tool/call') {
+        let rawInput: unknown
+        try {
+          rawInput = JSON.parse(event.data.arguments)
+        } catch {
+          rawInput = event.data.arguments
+        }
+        notify({
+          sessionId: record.agent.session.id,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: String(event.data.callId),
+            title: event.data.name,
+            status: 'in_progress',
+            kind: 'execute',
+            rawInput,
+          },
+        })
+      }
+      // 工具调用完成：tool/result → tool_call_update（status:completed + 输出摘要）
+      if (event.type === 'tool/result') {
+        const out = event.data.message
+        const callId = (out as { toolCallId?: unknown }).toolCallId
+        let rawOutput: unknown = ''
+        try {
+          const blocks = (out as { content?: Array<{ type?: string; text?: string }> }).content
+          if (Array.isArray(blocks)) {
+            rawOutput = blocks
+              .filter(b => b?.type === 'text' && typeof b.text === 'string')
+              .map(b => b.text)
+              .join('\n')
+              .slice(0, 2000)
+          }
+        } catch {
+          rawOutput = ''
+        }
+        if (callId !== undefined) {
+          notify({
+            sessionId: record.agent.session.id,
+            update: {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: String(callId),
+              status: 'completed',
+              rawOutput,
+            },
+          })
+        }
+      }
       if (event.type === 'assistant/message') {
         const inflight = record.inflight?.turn === event.data.turn ? record.inflight : undefined
         const previous = record.outputTail
+        // [本地改造延续] 透传 usage 到 _meta（ACP 标准扩展点），供 agents-to-im 侧展示 Cache/上下文/余额。
+        // TokenUsage 字段直接映射，缺省补 0，避免下游 NaN。
+        const usageMeta = (() => {
+          const u = (event.data as { usage?: unknown }).usage as
+            | { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }
+            | undefined
+          if (u === undefined) return undefined
+          return {
+            usage: {
+              inputTokens: u.inputTokens ?? 0,
+              outputTokens: u.outputTokens ?? 0,
+              cacheReadTokens: u.cacheReadTokens ?? 0,
+              cacheWriteTokens: u.cacheWriteTokens ?? 0,
+              reasoningTokens: u.reasoningTokens ?? 0,
+            },
+          }
+        })()
         const delivery = previous.then(async () => {
           for (const block of event.data.message.content) {
             const content = await assistantBlockToAcp(ctx, block)
             if (content === undefined) continue
             await notify({
               sessionId: record.agent.session.id,
-              update: { sessionUpdate: 'agent_message_chunk', content },
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content,
+                ...(usageMeta === undefined ? {} : { _meta: usageMeta }),
+              },
             })
           }
         })

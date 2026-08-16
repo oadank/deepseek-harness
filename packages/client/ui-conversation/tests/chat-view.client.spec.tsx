@@ -284,6 +284,8 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
     openFile,
     loadOlder,
     loadImage: vi.fn(() => Promise.reject(new Error('not used'))),
+    loadVoice: vi.fn(() => Promise.reject(new Error('not used'))),
+    synthesizeVoice: undefined,
     inspectCall,
     chatScroll,
     forkAt,

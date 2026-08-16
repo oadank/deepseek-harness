@@ -181,6 +181,7 @@ function mount(
           renderSlot={renderSlot as never}
           views={views}
           releaseSessionImages={vi.fn()}
+          releaseSessionVoices={vi.fn()}
           bindDraftMirror={write => wiring.bindMirror(write)}
         />
       )
@@ -210,6 +211,10 @@ function mount(
           useMenuLauncher={bindSnapshotSelector(createSnapshotStore<string | null>(null))}
           stop={stop}
           command={() => Promise.resolve(true)}
+          readBalance={undefined}
+          sendVoice={undefined}
+          transcribeVoice={undefined}
+          synthesizeVoice={undefined}
           t={t}
           renderSlot={((key: string, seatOwner: object) => {
             // The bar's own seats: recorded so a case can assert what share

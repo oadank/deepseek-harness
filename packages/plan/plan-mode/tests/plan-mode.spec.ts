@@ -561,7 +561,7 @@ describe('/plan', () => {
     const plainSteer = vi.fn()
     ;(plainAgent as unknown as { steer: typeof plainSteer }).steer = plainSteer
     expect(ctx.commands.list(plainAgent)).toEqual([
-      { name: 'plan', description: 'Enter or leave plan mode', input: { hint: '[off|message]', images: true } },
+      { name: 'plan', description: '进入或退出计划模式', input: { hint: '[off|消息]', images: true } },
     ])
 
     const signal = new AbortController().signal
@@ -570,7 +570,7 @@ describe('/plan', () => {
     const plain = await ctx.commands.execute(plainAgent, '/plan', [], signal)
     expect(plain?.result).toEqual({
       kind: 'success',
-      text: 'Entering plan mode (applies from the next step). Use /plan off to leave.',
+      text: '正在进入计划模式（从下一步生效）。使用 /plan off 退出。',
     })
     expect(ctx.planMode.get(plainAgent)).toEqual({ active: false, pending: true })
     expect(plainSteer).not.toHaveBeenCalled()
@@ -582,7 +582,7 @@ describe('/plan', () => {
     const plan = await ctx.commands.execute(messageAgent, '/plan   draft the migration  ', [], signal)
     expect(plan?.result).toEqual({
       kind: 'success',
-      text: 'Entering plan mode (applies from the next step). Use /plan off to leave.',
+      text: '正在进入计划模式（从下一步生效）。使用 /plan off 退出。',
     })
     expect(ctx.planMode.get(messageAgent)).toEqual({ active: false, pending: true })
     expect(messageSteer).toHaveBeenCalledExactlyOnceWith({
@@ -601,7 +601,7 @@ describe('/plan', () => {
 
     const inactive = await agentWithSession(ctx, 'inactive-plan-command')
     expect((await ctx.commands.execute(inactive, '/plan off', [], signal))?.result)
-      .toEqual({ kind: 'success', text: 'Plan mode is already inactive.' })
+      .toEqual({ kind: 'success', text: '计划模式已处于关闭状态。' })
     expect(ctx.planMode.get(inactive)).toEqual({ active: false })
 
     const entering = await agentWithSession(ctx, 'entering-plan-command')
@@ -610,7 +610,7 @@ describe('/plan', () => {
     ;(entering as unknown as { steer: typeof enteringSteer }).steer = enteringSteer
     await ctx.commands.execute(entering, '/plan', [], signal)
     expect((await ctx.commands.execute(entering, '/plan off', [], signal))?.result)
-      .toEqual({ kind: 'success', text: 'Plan mode entry cancelled.' })
+      .toEqual({ kind: 'success', text: '计划模式进入已取消。' })
     expect(ctx.planMode.get(entering)).toEqual({ active: false, pending: false })
     expect(enteringSteer).not.toHaveBeenCalled()
     await boundary(ctx, entering, 'step-start')
@@ -622,10 +622,10 @@ describe('/plan', () => {
     const activeSteer = vi.fn()
     ;(active as unknown as { steer: typeof activeSteer }).steer = activeSteer
     expect((await ctx.commands.execute(active, '/plan off', [], signal))?.result)
-      .toEqual({ kind: 'success', text: 'Leaving plan mode (applies from the next step).' })
+      .toEqual({ kind: 'success', text: '正在退出计划模式（从下一步生效）。' })
     expect(ctx.planMode.get(active)).toEqual({ active: true, pending: false })
     expect((await ctx.commands.execute(active, '/plan off', [], signal))?.result)
-      .toEqual({ kind: 'success', text: 'Leaving plan mode (applies from the next step).' })
+      .toEqual({ kind: 'success', text: '正在退出计划模式（从下一步生效）。' })
     expect(activeSteer).not.toHaveBeenCalled()
     await boundary(ctx, active, 'step-start')
     expect(ctx.planMode.get(active)).toEqual({ active: false })
@@ -638,10 +638,10 @@ describe('/plan', () => {
     const signal = new AbortController().signal
     const agent = await agentWithSession(ctx, 'idle-plan-command')
     expect((await ctx.commands.execute(agent, '/plan', [], signal))?.result)
-      .toEqual({ kind: 'success', text: 'Plan mode on. Use /plan off to leave.' })
+      .toEqual({ kind: 'success', text: '计划模式已开启。使用 /plan off 退出。' })
     expect(foldPlanMode(agent.session.events)).toBe(true)
     expect((await ctx.commands.execute(agent, '/plan off', [], signal))?.result)
-      .toEqual({ kind: 'success', text: 'Plan mode off.' })
+      .toEqual({ kind: 'success', text: '计划模式已关闭。' })
     expect(foldPlanMode(agent.session.events)).toBe(false)
   })
 

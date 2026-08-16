@@ -29,6 +29,7 @@ export type {
   GoalsApi, GoalRef,
   SettingsApi, SettingsNamespaceView, SettingsPathOpView, SettingsSecretView,
   CredentialsApi, CredentialView, ConfigurableProviderView, DiscoveredModelView, LlmApi,
+  BalanceApi, BalanceView, VoiceAttachmentRef, VoiceMediaType,
 } from './api.ts'
 export {
   RpcId,
@@ -103,7 +104,12 @@ export function apply(ctx: Context): void {
   }
   const handle: ConnectionHandle = {
     api,
-    isLoopback: pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
+    // [本地改造 2026-08-15] tailnet 域名（*.ts.net）与回环同等视为可信持久化来源：
+    // host 端 fence 已信任 ts.net（见 api-request-trust.ts），此处同步放宽，
+    // 否则远程浏览器（tailscale serve 访问）settings 走 memory 模式，
+    // busyEnter 等设置刷新即丢（用户选"插队"后回默认"排队"）。
+    isLoopback: pageLocation === undefined || isLoopbackHostname(pageLocation.hostname)
+      || (typeof pageLocation.hostname === 'string' && pageLocation.hostname.endsWith('.ts.net')),
     hostDescription: {
       getSnapshot: () => description,
       subscribe: (listener) => {

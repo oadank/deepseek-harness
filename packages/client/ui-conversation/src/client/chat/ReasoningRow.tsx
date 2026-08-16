@@ -27,6 +27,7 @@ function latestLine(text: string): string {
 export function ReasoningRow({ text, running, t }: { text: string; running: boolean; t: ChatViewSlotProps['t'] }) {
   const [expanded, setExpanded] = useState(false)
   const summaryRef = useRef<HTMLSpanElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const summary = running ? latestLine(text) : firstLine(text)
   const scheduleSummaryScroll = useThrottledVisualUpdate(() => {
     const element = summaryRef.current
@@ -36,6 +37,13 @@ export function ReasoningRow({ text, running, t }: { text: string; running: bool
   useEffect(() => {
     scheduleSummaryScroll()
   }, [running, scheduleSummaryScroll, summary])
+  // The expanded body is height-capped; keep the streamed tail visible while
+  // the row is open so new reasoning tokens never sit below the fold.
+  useEffect(() => {
+    if (!running || !expanded) return
+    const element = bodyRef.current
+    if (element !== null) element.scrollTop = element.scrollHeight
+  }, [running, expanded, text])
 
   return (
     <div className={css.root} data-variant="think" data-state={running ? 'running' : 'ok'}>
@@ -58,7 +66,7 @@ export function ReasoningRow({ text, running, t }: { text: string; running: bool
           </>
         )}
       >
-        <div className={css.thinkBody}>{text}</div>
+        <div ref={bodyRef} className={css.thinkBody}>{text}</div>
       </DisclosureRow>
     </div>
   )

@@ -13,7 +13,7 @@ export type DirectoryPickerBackendKind = 'native' | 'browse'
 
 /** Environment keys the resolution reads (a `process.env` subset). */
 export type DirectoryPickerEnv = Readonly<
-  Partial<Record<'SSH_CONNECTION' | 'SSH_TTY' | 'DISPLAY' | 'WAYLAND_DISPLAY', string>>
+  Partial<Record<'SSH_CONNECTION' | 'SSH_TTY' | 'DISPLAY' | 'WAYLAND_DISPLAY' | 'DSH_FORCE_BROWSE_PICKER', string>>
 >
 
 /** Host facts the backend choice is a pure function of, sampled once at boot. */
@@ -45,6 +45,10 @@ const present = (value: string | undefined): boolean => value !== undefined && v
  * @returns the backend kind to mount.
  */
 export function resolveDirectoryPickerBackend(facts: DirectoryPickerHostFacts): DirectoryPickerBackendKind {
+  // [本地改造 2026-08-13] DSH_FORCE_BROWSE_PICKER=1 → 强制 browse（浏览器目录树）：
+  // Windows nssm 服务跑在 session 0，原生 IFileOpenDialog COM 对话框无交互桌面
+  // 弹不出（pick 卡死）。browse 是纯 HTTP 目录列表，session 0 完全可用。
+  if (facts.env.DSH_FORCE_BROWSE_PICKER === '1') return 'browse'
   if (facts.bindHost !== '127.0.0.1') return 'browse'
   if (present(facts.env.SSH_CONNECTION) || present(facts.env.SSH_TTY)) return 'browse'
   if (facts.platform === 'darwin' || facts.platform === 'win32') return 'native'
