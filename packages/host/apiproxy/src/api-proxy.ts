@@ -1483,9 +1483,12 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   })
 
   // [本地改造 2026-08-16] 语音规则（用户定义，已写入人设 shared-persona/global-persona）：
-  // 1) 用户本轮发过语音 → 必须语音回复（自动合成，TTS auto）
+  // 1) 用户本轮发过语音 → 兜底自动合成语音回复（TTS auto；agent 应主动用 send_voice 发专门口语）
   // 2) 用户文本明确要求发语音 / 指定服务商（小米/微软）→ 自动合成（用指定 provider）
   // 3) 其他情况不自动合成——agent 自主决定，需要时调用 send_voice 工具主动发
+  // 语音内容原则：只念口语化的关键信息（去代码/URL/数字密集内容，取自然句子），
+  // 不硬截 80 字、不加"请看文字回复"尾巴；无可念内容则不合成（宁缺毋滥）。
+  // 只检查当前 turn 内的 user/message——历史语音不会让后续每轮都带语音。
   // 异步 fire-and-forget，不阻塞事件推送；只处理 turn/end，append 的 voice/reply 不触发本分支（防递归）。
   ctx.on('session/event', (session, event) => {
     if (event.type !== 'turn/end') return
@@ -1493,34 +1496,37 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     void (async () => {
       try {
         const events = session.events
+        // 找当前 turn 的 turn/start seq，只统计 turn 内的用户消息（历史语音不会让后续每轮都带）。
+        let turnStartSeq = -1
+        for (const ev of events) {
+          if (ev.type === 'turn/start' && ev.data.turn === turn) { turnStartSeq = ev.seq; break }
+        }
         let userSpokeVoice = false
         let requestedProvider: string | null = null
         // 只取该 turn 最后一条非空 assistant 文本（语音回复念整段长回复会几十秒）。
         let lastAssistantText = ''
         for (const ev of events) {
-          if (ev.type === 'user/message') {
+          if (ev.type === 'user/message' && ev.seq > turnStartSeq) {
             const content = (ev.data as { content?: readonly unknown[] }).content ?? []
             let userText = ''
             for (const block of content) {
-              const type = (block as { type?: string })?.type
+              const type = (block as { type?: string }).type
               if (type === 'voice') userSpokeVoice = true
               else if (type === 'text') userText += (block as { text?: string }).text ?? ''
             }
             if (userText.trim() !== '' && requestedProvider === null) requestedProvider = voiceRequestProvider(userText)
           } else if (ev.type === 'assistant/message' && ev.data.turn === turn) {
             const text = (ev.data.message.content as readonly unknown[])
-              .filter(block => (block as { type?: string })?.type === 'text')
+              .filter(block => (block as { type?: string }).type === 'text')
               .map(block => (block as { text?: string }).text ?? '')
               .join('')
             if (text.trim() !== '') lastAssistantText = text
           }
         }
         if ((!userSpokeVoice && requestedProvider === null) || lastAssistantText === '') return
-        // [本地改造 2026-08-16] 语音回复只念关键结论：截断到约 80 字（中文 TTS
-        // 每秒约 4-5 字，80 字 ≈ 15-20 秒语音，适合语音回复；过长会合成几十秒音频）。
-        const speak = lastAssistantText.length > 80
-          ? `${lastAssistantText.slice(0, 80)}（完整内容请查看文字回复）`
-          : lastAssistantText
+        // 语音内容 = 口语化关键信息（从助手文本提取），无可念内容则不合成。
+        const speak = extractSpeakable(lastAssistantText)
+        if (speak === '') return
         const audio = await synthesizeReplyVoice(speak, requestedProvider ?? 'auto')
         if (audio === null) return
         const attachment = await saveVoiceFile(
@@ -1583,9 +1589,9 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       const agent = exec.agent
       if (agent === undefined) return { ok: false as const, error: 'no session context' }
       const session = agent.session
-      const text = String(args.text ?? '').trim()
+      const text = args.text.trim()
       if (text === '') return { ok: false as const, error: 'text is empty' }
-      const provider = String(args.provider ?? 'auto')
+      const provider = args.provider ?? 'auto'
       try {
         const audio = await synthesizeReplyVoice(text, provider)
         if (audio === null) return { ok: false as const, error: 'TTS synthesis failed' }
@@ -1613,12 +1619,41 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     },
   }))
 
-  /** [本地改造 2026-08-16] 用户文本是否明确要求语音回复；返回要用的 TTS provider，否则 null。 */
+  /** [本地改造 2026-08-16] 用户文本是否明确要求语音回复；返回要用的 TTS provider，否则 null。
+   * 只认明确祈使（用语音回/发个语音/念给我听/指定小米或微软），"语音回复"等讨论词不触发。 */
   function voiceRequestProvider(text: string): string | null {
-    if (!/(语音回复|回语音|回个语音|发个语音|发语音|用语音|语音回|语音说|语音发|语音告诉|念给我|语音播报|语音听)/.test(text)) return null
-    if (/小米/.test(text)) return 'xiaomi'
+    if (!/(用语音回|回个语音|发个语音|发语音|用语音说|语音回我|语音告诉我|念给我|语音播报|用小米|用微软|小米语音|微软语音|xiaomi|edge语音|语音回复我)/i.test(text)) return null
+    if (/小米|xiaomi/i.test(text)) return 'xiaomi'
     if (/微软|edge/i.test(text)) return 'edge'
     return 'auto'
+  }
+
+  /** [本地改造 2026-08-16] 从助手文本提取适合语音念的口语部分：去掉代码块/内联代码/
+   * URL/Markdown 装饰，跳过代码密集行与纯数字路径行，取前 2 个自然句子（最多约 200 字）。
+   * 无可念内容返回空串——调用方不合成，避免机械复读文本/代码的垃圾语音。 */
+  function extractSpeakable(text: string): string {
+    const cleaned = text
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/`[^`]*`/g, ' ')
+      .replace(/https?:\/\/\S+/g, ' ')
+      .replace(/[#>*|~-]\s*/g, ' ')
+    const lines = cleaned.split('\n').filter((line) => {
+      const t = line.trim()
+      if (t === '') return false
+      // 代码密集行（含 = { } ; $ 或反斜杠路径）与纯数字/符号行不适合语音。
+      if (/[=;{}<>$\\]/.test(t)) return false
+      if (/^[\d\s.,%:/-]+$/.test(t)) return false
+      return true
+    })
+    const prose = lines.join(' ').replace(/\s+/g, ' ').trim()
+    if (prose === '') return ''
+    const sentences = prose.match(/[^。！？.!?]+[。！？.!?]?/g) ?? [prose]
+    let speak = ''
+    for (const sentence of sentences.slice(0, 2)) {
+      if ((speak + sentence).length > 200) break
+      speak += sentence
+    }
+    return speak.trim()
   }
 
   /** Remove a wait before settling it: synchronous deletion makes the first claimant win. */

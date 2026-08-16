@@ -219,13 +219,18 @@ function projectUserText(text: string, sessionLabels: readonly string[]): ReactN
   return <>{parts}</>
 }
 
+/** [本地改造 2026-08-16] 语音条宽度：4 秒内固定 96px（短语音不显拥挤），超过后每增 1 秒 +4px，上限 320px。 */
+function voiceCardWidth(seconds: number): number {
+  if (seconds <= 4) return 96
+  return Math.min(320, 96 + (seconds - 4) * 4)
+}
+
 /** Right-aligned voice message card: session-authorized playback with duration. */
 export function VoiceCard({ attachment, load, t }: {
   attachment: VoiceAttachmentRef
   load?: (ref: VoiceAttachmentRef) => Promise<string>
   t: ChatViewSlotProps['t']
-}) {
-  const [url, setUrl] = useState<string | null>(null)
+}) {  const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const [playing, setPlaying] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -255,12 +260,12 @@ export function VoiceCard({ attachment, load, t }: {
   const seconds = attachment.durationMs !== undefined
     ? Math.max(1, Math.ceil(attachment.durationMs / 1_000))
     : null
-  // [本地改造 2026-08-16] 语音条宽度按时长变化（微信风格）：无识别文本的语音
-  // （如 agent 语音回复横条）按秒数线性定宽，1s≈44px、10s≈80px、30s≈160px、
-  // 60s≈280px，上限 320px；带 transcript 的用户语音由文本自然撑宽（保持现状）。
+  // [本地改造 2026-08-16] 语音条宽度按时长变化（微信风格）：8 秒以内固定宽度
+  // （短语音不显拥挤），超过 8 秒按秒数线性增宽，上限 320px；
+  // 带 transcript 的用户语音由文本自然撑宽（保持现状）。
   const hasTranscript = attachment.transcript !== undefined && attachment.transcript !== ''
   const durationWidth = !hasTranscript && attachment.durationMs !== undefined
-    ? { width: Math.min(320, Math.max(44, 40 + (seconds ?? 1) * 4)) }
+    ? { width: voiceCardWidth(seconds ?? 1) }
     : undefined
   return (
     <div className={css.voiceCard} data-voice style={durationWidth}>

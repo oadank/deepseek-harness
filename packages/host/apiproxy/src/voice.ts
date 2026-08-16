@@ -9,12 +9,13 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, readdir, unlink } from 'node:fs/promises'
+import { mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn, execFileSync } from 'node:child_process'
 import type { VoiceAttachmentRef, VoiceMediaType } from './api/sessions.ts'
+import { edgeTts } from './edge-tts.ts'
 
 /** ASR media types accepted from the browser wire. */
 export const VOICE_MEDIA_TYPES: readonly VoiceMediaType[] = [
@@ -115,7 +116,7 @@ export async function transcribeVoice(audioPath: string): Promise<string> {
   try {
     wavPath = await transcodeToWav(audioPath)
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 35_000)
+    const timer = setTimeout(() => { controller.abort() }, 35_000)
     try {
       const response = await fetch(ASR_SERVICE_URL, {
         method: 'POST',
@@ -162,10 +163,6 @@ function transcodeToWav(inputPath: string): Promise<string> {
   })
 }
 
-/** agents-to-im TTS CLI entry; mp3 output is browser-universal. */
-const TTS_CLI = process.env.DSH_TTS_CLI
-  ?? 'C:\\D\\opt\\agents-to-im\\src\\feishu\\tts-cli.mjs'
-
 export interface SynthesizedVoice {
   mediaType: string
   data: Uint8Array
@@ -173,91 +170,109 @@ export interface SynthesizedVoice {
 }
 
 /**
- * Synthesize one reply through the local TTS engine (edge by default, or the
- * caller-chosen provider). Output is forced to mp3 via the `weixin` channel
- * mapping so any browser can play it. Never throws — returns null on failure.
+ * Synthesize reply voice through self-contained engines（TTS 独立化，不依赖 agents-to-im）：
+ *  - auto/edge：微软 Edge TTS（免费无 key，WebSocket，开箱即用）
+ *  - xiaomi：小米 MiMo TTS（HTTP 直连，需 TTS_XIAOMI_KEY 环境变量；文本 (唱歌) 标签触发唱歌）
+ *  - local：本地 TTS 命令（DSH_LOCAL_TTS_CMD，文本作末参，stdout 输出音频）
+ * 输出统一转 mp3（浏览器全兼容）。Never throws — returns null on failure.
  * @param text - reply text to speak.
- * @param provider - optional engine override (auto/edge/melo/matcha/xiaomi/wangwang/ali).
+ * @param provider - engine override (auto/edge/xiaomi/local; unknown falls back to edge).
  * @returns encoded audio, or null when synthesis or reading failed.
  */
 export async function synthesizeReplyVoice(text: string, provider?: string): Promise<SynthesizedVoice | null> {
-  const outputDir = join(process.env.TEMP ?? '/tmp', 'agents-to-im-tts')
-  const before = new Set<string>()
-  for (const entry of await readdir(outputDir).catch(() => [])) before.add(entry)
-  return new Promise<SynthesizedVoice | null>((resolveSynthesis) => {
-    // [本地改造 2026-08-16] TTS 不念 Markdown 符号：清理 ##、**、|、` 等标记，
-    // 只保留可朗读的纯文本。
-    const speak = stripMarkdown(text)
-    const args = [TTS_CLI, speak]
-    if (provider !== undefined && provider !== '' && provider !== 'auto') {
-      args.push('--provider', provider)
-    }
-    const child = spawn(process.execPath, args, {
-      windowsHide: true,
-      env: { ...process.env, TTS_CHANNEL: 'weixin' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let stdout = ''
-    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
-    child.stderr.on('data', () => { /* engine diagnostics stay quiet */ })
-    const timer = setTimeout(() => {
-      child.kill()
-      resolveSynthesis(null)
-    }, 60_000)
-    child.once('error', () => {
-      clearTimeout(timer)
-      resolveSynthesis(null)
-    })
-    child.once('close', async (code) => {
-      clearTimeout(timer)
-      if (code !== 0) {
-        resolveSynthesis(null)
-        return
-      }
-      // The CLI prints the produced path on its last stdout line.
-      const lines = stdout.trim().split('\n')
-      const path = lines.at(-1)?.trim()
-      if (path === undefined || path === '') {
-        resolveSynthesis(null)
-        return
-      }
-      try {
-        let audioPath = path
-        let produced: string | undefined
-        const data = new Uint8Array(await readFile(audioPath))
-        // [本地改造 2026-08-16] tts-cli 输出 Ogg/Opus（即使打印 MP3 中间产物）。
-        // 统一转 mp3 再落盘：浏览器全兼容（含 iOS Safari），mediaType 恒为 audio/mpeg。
-        if (looksLikeOgg(data)) {
-          const mp3 = join(outputDir, `dsh-tts-${randomUUID()}.mp3`)
-          try {
-            execFileSync(FFMPEG_BIN, ['-y', '-i', audioPath, '-c:a', 'libmp3lame', '-b:a', '128k', mp3], {
-              windowsHide: true, stdio: 'ignore', timeout: 30_000,
-            })
-            produced = mp3
-            audioPath = mp3
-          } catch {
-            // 转码失败保留原 Opus（部分浏览器仍可播）；mediaType 按实际格式给。
-          }
-        }
-        const finalData = new Uint8Array(await readFile(audioPath))
-        const durationMs = estimateAudioDurationMs(finalData, audioPath)
-        resolveSynthesis({
-          mediaType: looksLikeOgg(finalData) ? 'audio/ogg' : 'audio/mpeg',
-          data: finalData,
-          ...(durationMs === undefined ? {} : { durationMs }),
-        })
-        if (produced !== undefined) await unlink(produced).catch(() => {})
-      } catch {
-        resolveSynthesis(null)
-      } finally {
-        // Remove the freshly produced artifacts (mp3 + any raw intermediates).
-        const after = await readdir(outputDir).catch(() => [])
-        for (const name of after) {
-          if (!before.has(name)) await unlink(join(outputDir, name)).catch(() => {})
-        }
-      }
-    })
+  const speak = stripMarkdown(text)
+  const engine = provider ?? 'auto'
+  try {
+    if (engine === 'xiaomi') return await synthesizeXiaomiVoice(speak)
+    if (engine === 'local') return await synthesizeLocalVoice(speak)
+    return await synthesizeEdgeVoice(speak)
+  } catch {
+    return null
+  }
+}
+
+/** 微软 Edge TTS（免费）：输出即 mp3，无需转码。 */
+async function synthesizeEdgeVoice(text: string): Promise<SynthesizedVoice | null> {
+  const voice = process.env.TTS_EDGE_VOICE ?? 'zh-CN-XiaoxiaoNeural'
+  const mp3 = await edgeTts(text, voice)
+  return toMp3(new Uint8Array(mp3), 'audio/mpeg')
+}
+
+/** 小米 MiMo TTS：HTTP 直连 api.xiaomimimo.com（key/音色从环境变量读，不碰外部配置文件）。 */
+async function synthesizeXiaomiVoice(text: string): Promise<SynthesizedVoice | null> {
+  const apiKey = process.env.TTS_XIAOMI_KEY ?? ''
+  // [tts-debug] 定位小米失败：打印 key 是否存在 + HTTP 状态
+  console.error(`[tts-debug] xiaomi key=${apiKey === '' ? 'MISSING' : 'present'} env=${Object.keys(process.env).filter(k => /TTS|XIAOMI/i.test(k)).join(',') || 'none'}`)
+  if (apiKey === '') return null
+  const baseUrl = process.env.TTS_XIAOMI_BASE_URL ?? 'https://api.xiaomimimo.com/v1'
+  const voice = process.env.TTS_XIAOMI_VOICE ?? 'mimo_default'
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'mimo-v2.5-tts',
+      messages: [
+        { role: 'user', content: '把下面的文字转成语音' },
+        { role: 'assistant', content: text },
+      ],
+      max_tokens: 8192,
+      speed: 1.0,
+      voice,
+      audio: { format: 'wav' },
+    }),
   })
+  console.error(`[tts-debug] xiaomi http=${response.status}`)
+  if (!response.ok) return null
+  const payload = await response.json() as { choices?: Array<{ message?: { audio?: { data?: unknown } } }> }
+  const data = payload.choices?.[0]?.message?.audio?.data
+  if (typeof data !== 'string' || data.length < 100) return null
+  return toMp3(new Uint8Array(Buffer.from(data, 'base64')), 'audio/wav')
+}
+
+/** 本地 TTS 命令（可插拔）：spawn DSH_LOCAL_TTS_CMD，文本作末参，stdout 收音频字节。 */
+async function synthesizeLocalVoice(text: string): Promise<SynthesizedVoice | null> {
+  const command = process.env.DSH_LOCAL_TTS_CMD ?? ''
+  if (command === '') return null
+  const parts = command.split(/\s+/)
+  const bin = parts[0]
+  if (bin === undefined) return null
+  const rest = parts.slice(1)
+  const audio = execFileSync(bin, [...rest, text], {
+    windowsHide: true,
+    encoding: 'buffer',
+    timeout: 60_000,
+  }) as Buffer
+  return toMp3(new Uint8Array(audio), 'audio/mpeg')
+}
+
+/** 统一转 mp3：已是 mp3 直接返回；wav/其他容器用 ffmpeg 转（失败保留原格式）。 */
+async function toMp3(data: Uint8Array, declared: string): Promise<SynthesizedVoice | null> {
+  const isMp3 = data.length > 2 && data[0] === 0xFF && ((data[1] ?? 0) & 0xE0) === 0xE0
+  let finalData = data
+  let mediaType = declared
+  if (!isMp3) {
+    const tmpIn = join(process.env.TEMP ?? '/tmp', `dsh-tts-in-${randomUUID()}.wav`)
+    const mp3Path = join(process.env.TEMP ?? '/tmp', `dsh-tts-${randomUUID()}.mp3`)
+    await writeFile(tmpIn, data)
+    try {
+      execFileSync(FFMPEG_BIN, ['-y', '-i', tmpIn, '-c:a', 'libmp3lame', '-b:a', '128k', mp3Path], {
+        windowsHide: true, stdio: 'ignore', timeout: 30_000,
+      })
+      finalData = new Uint8Array(await readFile(mp3Path))
+      mediaType = 'audio/mpeg'
+    } catch {
+      // 转码失败保留原容器（部分浏览器仍可播）。
+    } finally {
+      await unlink(tmpIn).catch(() => {})
+      await unlink(mp3Path).catch(() => {})
+    }
+  }
+  const durationMs = estimateAudioDurationMs(finalData)
+  return {
+    mediaType,
+    data: finalData,
+    ...(durationMs === undefined ? {} : { durationMs }),
+  }
 }
 
 /** True when the leading bytes are an Ogg container (OggS magic). */
