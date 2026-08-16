@@ -118,8 +118,8 @@ it('assembles the shipped Web catalog, file-reference guidance, and confined acc
   try {
     expect(scaffold.ctx.commands.list(commandHandle.agent)).toContainEqual({
       name: 'feedback',
-      description: 'record feedback about this session',
-      input: { hint: '<text>' },
+      description: '记录对本会话的反馈',
+      input: { hint: '<内容>' },
     })
   } finally {
     await commandHandle.dispose()

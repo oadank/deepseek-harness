@@ -28,6 +28,10 @@ import {
   sessionSearchRequestSchema,
   sessionSelectModelRequestSchema,
   sessionUpdateQueueRequestSchema,
+  sessionVoiceAsrRequestSchema,
+  sessionVoiceRequestSchema,
+  sessionVoiceTtsRequestSchema,
+  sessionSendVoiceMessageRequestSchema,
 } from '../api/sessions.schema.ts'
 import {
   hostCreateDirectoryRequestSchema, hostDescribeRequestSchema,
@@ -64,6 +68,7 @@ import {
   credentialsDescribeRequestSchema, credentialsSetRequestSchema, credentialsUnsetRequestSchema,
 } from '../api/credentials.schema.ts'
 import { llmDiscoverModelsRequestSchema, llmModelsRequestSchema, llmProvidersRequestSchema } from '../api/llm.schema.ts'
+import { balanceGetRequestSchema } from '../api/balance.schema.ts'
 import {
   subagentHistoryRequestSchema,
   subagentInterruptRequestSchema,
@@ -98,6 +103,10 @@ const UNARY_ROUTES: UnaryRoutes = {
   'session.fork': { schema: sessionForkRequestSchema, invoke: (api, r) => api.sessions.fork(r) },
   'session.prompt': { schema: sessionPromptRequestSchema, invoke: (api, r) => api.sessions.prompt(r) },
   'session.attachment': { schema: sessionAttachmentRequestSchema, invoke: (api, r) => api.sessions.attachment(r) },
+  'session.voice': { schema: sessionVoiceRequestSchema, invoke: (api, r) => api.sessions.voice(r) },
+  'session.voiceAsr': { schema: sessionVoiceAsrRequestSchema, invoke: (api, r) => api.sessions.voiceAsr(r) },
+  'session.voiceTts': { schema: sessionVoiceTtsRequestSchema, invoke: (api, r) => api.sessions.voiceTts(r) },
+  'session.sendVoiceMessage': { schema: sessionSendVoiceMessageRequestSchema, invoke: (api, r) => api.sessions.sendVoiceMessage(r) },
   'session.updateQueue': { schema: sessionUpdateQueueRequestSchema, invoke: (api, r) => api.sessions.updateQueue(r) },
   'session.cancel': { schema: sessionCancelRequestSchema, invoke: (api, r) => api.sessions.cancel(r) },
   'subagent.list': { schema: subagentListRequestSchema, invoke: (api, r, signal) => api.subagents.list(r, signal) },
@@ -140,6 +149,7 @@ const UNARY_ROUTES: UnaryRoutes = {
   'llm.providers': { schema: llmProvidersRequestSchema, invoke: (api, r) => api.llm.providers(r) },
   'llm.models': { schema: llmModelsRequestSchema, invoke: (api, r) => api.llm.models(r) },
   'llm.discoverModels': { schema: llmDiscoverModelsRequestSchema, invoke: (api, r, signal) => api.llm.discoverModels(r, signal) },
+  'balance.get': { schema: balanceGetRequestSchema, invoke: (api, r) => api.balance.get(r) },
 }
 
 /** Route lookup that narrows an arbitrary path segment to a map key (single cast point for the string→key refinement). */

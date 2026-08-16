@@ -162,6 +162,54 @@ describe('pi-ai request context conversion', () => {
     })
   })
 
+  it('flattens voice blocks into transcript text on the text-only path (本地改造)', () => {
+    const context = toPiContext(request([
+      user([{
+        type: 'voice',
+        attachment: {
+          voiceId: 'sha256:voice', mediaType: 'audio/mp4', bytes: 100, durationMs: 3200,
+          transcript: '帮我查一下明天的天气',
+        },
+      }]),
+      history('assistant', [{ type: 'text', text: '好的' }]),
+    ]))
+    expect(context.messages).toEqual([
+      { role: 'user', content: '[用户发送了一条语音（时长 3 秒），识别内容：帮我查一下明天的天气]', timestamp: 0 },
+      expect.objectContaining({ role: 'assistant' }),
+    ])
+  })
+
+  it('degrades voice blocks to local-path text without a transcript (本地改造)', () => {
+    const context = toPiContext(request([
+      user([{
+        type: 'voice',
+        attachment: { voiceId: 'sha256:voice', mediaType: 'audio/mp4', bytes: 100 },
+      }]),
+    ]))
+    expect(context.messages[0]).toEqual({
+      role: 'user',
+      content: expect.stringMatching(/^\[用户发送了一条语音，本地语音文件路径: .*\]$/),
+      timestamp: 0,
+    })
+  })
+
+  it('flattens voice blocks into transcript text on the image path (本地改造)', async () => {
+    const context = await toPiContext(request([
+      user([{
+        type: 'voice',
+        attachment: {
+          voiceId: 'sha256:voice', mediaType: 'audio/mp4', bytes: 100,
+          transcript: '语音内容',
+        },
+      }]),
+    ]), attachments)
+    expect(context.messages[0]).toEqual({
+      role: 'user',
+      content: '[用户发送了一条语音，识别内容：语音内容]',
+      timestamp: 0,
+    })
+  })
+
   it('handles in-history system and assistant messages explicitly on the image path', async () => {
     await expect(toPiContext(request([
       history('system', [{ type: 'image', attachment: ref }]),

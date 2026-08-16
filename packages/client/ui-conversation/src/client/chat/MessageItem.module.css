@@ -16,6 +16,66 @@
   min-width: 0;
   max-width: min(525px, 82%);
 }
+
+/* [本地改造 2026-08-16] 语音消息卡片：播放按钮 + 时长，右对齐气泡风格。 */
+.voiceCard {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  height: 44px;
+  padding: 0 16px 0 10px;
+  background: var(--dsw-specific-bubble);
+  border-radius: 22px;
+}
+
+.voicePlay {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-specific-selector);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.voicePlay:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+.voicePlay:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.voiceDuration {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* [本地改造 2026-08-16] 语音识别文本（host ASR 写入 attachment.transcript）。 */
+.voiceTranscript {
+  display: block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* [本地改造 2026-08-16] 助手语音回复独立横条：左对齐，与用户语音消息同级。 */
+.voiceReplyRow {
+  display: flex;
+  justify-content: flex-start;
+  padding: 2px 0;
+}
 .bubble {
   /* 525px cap inside the 736 column; percentage keeps narrow windows sane. */
   max-width: 100%;

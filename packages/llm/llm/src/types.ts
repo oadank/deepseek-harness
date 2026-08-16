@@ -74,6 +74,29 @@ export interface ImageBlock {
   attachment: ImageAttachmentRef
 }
 
+/**
+ * A durable voice recording reference, valid in user content today. The host
+ * persists the browser-uploaded bytes content-addressed beside image objects
+ * and transcribes them through the local ASR service; the transcript rides the
+ * reference so serialization can degrade cleanly when recognition fails.
+ */
+export interface VoiceBlock {
+  type: 'voice'
+  /** Immutable bytes and recognition metadata for one recording. */
+  attachment: {
+    /** Opaque storage identifier; never a filesystem path or bearer URL. */
+    voiceId: string
+    /** Recording container format from the browser wire (audio/mpeg added for TTS replies). */
+    mediaType: 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/wav' | 'audio/mpeg'
+    /** Exact encoded byte length. */
+    bytes: number
+    /** Recorder-reported length in milliseconds. */
+    durationMs?: number
+    /** Local ASR transcript; absent when recognition failed or is unavailable. */
+    transcript?: string
+  }
+}
+
 /** A tool invocation requested by the model. */
 export interface ToolCallBlock {
   type: 'tool-call'
@@ -100,6 +123,7 @@ export interface ContentBlockMap {
   'text': TextBlock
   'reasoning': ReasoningBlock
   'image': ImageBlock
+  'voice': VoiceBlock
   'tool-call': ToolCallBlock
   'tool-result': ToolResultBlock
 }

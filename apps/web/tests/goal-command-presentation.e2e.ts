@@ -74,7 +74,7 @@ describe('web e2e: /goal human transcript presentation', () => {
     })
     expect(typography).toMatchObject({ fontSize: '14px', lineHeight: '22px' })
     expect(typography.fontFamily).not.toBe(typography.parentFontFamily)
-    const resultRow = page.locator('[data-variant="others"]').filter({ hasText: 'No goal is currently set.' })
+    const resultRow = page.locator('[data-variant="others"]').filter({ hasText: '当前未设置目标。' })
     await expect.poll(() => resultRow.count(), { timeout: 10_000 }).toBe(1)
     expect(await resultRow.getByText('goal', { exact: true }).count()).toBe(1)
     await expect.poll(() => page.locator('[data-phase="active"]').count()).toBe(1)
@@ -103,7 +103,7 @@ describe('web e2e: /goal human transcript presentation', () => {
     acknowledgeReloadConnectionLoss(tripwire, warningStart)
 
     await expect.poll(() => page.locator('[data-command-input]').textContent(), { timeout: 15_000 }).toBe('/goal')
-    const resultRow = page.locator('[data-variant="others"]').filter({ hasText: 'No goal is currently set.' })
+    const resultRow = page.locator('[data-variant="others"]').filter({ hasText: '当前未设置目标。' })
     await expect.poll(() => resultRow.count(), { timeout: 10_000 }).toBe(1)
     await expect.poll(() => page.locator('[data-phase="active"]').count()).toBe(1)
 

@@ -17,14 +17,14 @@ describe('/export Web download command', () => {
 
     expect(descriptor).toMatchObject({
       name: 'export',
-      description: 'Download this Session log as a ZIP archive',
+      description: '下载本会话日志（ZIP 压缩包）',
     })
     const invoke = (rawInput: string) => descriptor?.handler({ rawInput } as CommandInvocation)
     await expect(invoke('')).resolves.toEqual({
-      kind: 'success', text: 'Session log download requested.',
+      kind: 'success', text: '已请求下载会话日志。',
     })
     await expect(invoke(' output.zip')).resolves.toEqual({
-      kind: 'error', text: 'The Web /export command does not accept a path.',
+      kind: 'error', text: 'Web 端 /export 命令不接受路径参数。',
     })
 
     await fiber.dispose()

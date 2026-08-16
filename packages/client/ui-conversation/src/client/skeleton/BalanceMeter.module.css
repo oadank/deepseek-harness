@@ -1,0 +1,31 @@
+/* Balance pill beside the model seat: live `余额: ¥xx.xx` text only
+   (same 28px height family as the model select, secondary label tone). */
+
+.root {
+  display: inline-flex;
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.trigger:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.text {
+  font-variant-numeric: tabular-nums;
+}

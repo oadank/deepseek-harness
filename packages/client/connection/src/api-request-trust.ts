@@ -105,6 +105,21 @@ export function isTrustedApiRequest(request: ApiTrustRequest, trustedHosts: read
   if (host === undefined) return false
   const hostUrl = parseAuthority(host)
   if (hostUrl === undefined) return false
+  // [本地改造 2026-08-14] tailnet 域名（Tailscale *.ts.net）视为可信：
+  // 本机通过 tailscale serve 转发（https://lecoo.tailb5f10f.ts.net → 127.0.0.1:3080）
+  // 访问时 Host/Origin 是 *.ts.net，trustedHosts 参数在 nssm 环境下注入失败，
+  // 直接信任 tailnet 域名（仅本 tailnet 可达，非公开攻击面）。
+  if (hostUrl.hostname.endsWith('.ts.net')) {
+    const origin = header(request.headers, 'origin')
+    if (origin !== undefined) {
+      try {
+        if (new URL(origin).hostname.endsWith('.ts.net')) return true
+      } catch {
+        return false
+      }
+    }
+    return true
+  }
   if (!isLoopbackHostname(hostUrl.hostname) && !isTrustedAuthority(hostUrl, trustedHosts)) return false
   // Cross-site fence: modern browsers label the initiator relationship on
   // every fetch; an explicit cross-site marker is refused regardless of Origin.

@@ -34,7 +34,7 @@ import { deriveEventMessage, foldSurface } from '@deepseek-ai/dsh-session/surfac
 import type {
   ApiProxy, ClientRequest, ClientResponse, HistoryEntry, HostFrame, MuxFrame, RpcReceipt,
   ModelProviderGroup, ModelSelection, RpcRequest, RpcResponse, RpcResult, ServerRequest, ServerResponse, SessionSummary,
-  ToolCallView, ToolEventView, ToolResultView, WorkspaceId, WorkspaceView,
+  ToolCallView, ToolEventView, ToolResultView, VoiceAttachmentRef, WorkspaceId, WorkspaceView,
 } from './api.ts'
 import type { RequestPayload, ResponseValue, RpcMethodMap } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { AbstractApiClient, RpcId, SESSION_SEARCH_RESULT_LIMIT } from './api.ts'
@@ -341,6 +341,18 @@ const FIXTURE_IMAGE_REF: ImageAttachmentRef = {
   width: 160,
   height: 90,
   name: 'fixture-image.png',
+}
+
+/** Tiny deterministic WAV payload (44-byte header + silence) for fixture voice reads. */
+const FIXTURE_VOICE_DATA = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='
+/** Minimal mp3 (silent) so fixture voice replies are playable. */
+const FIXTURE_MP3_DATA = 'SUQzBAAAAAAAI1RTU0UAAAAPAAADTEFNRTMuOTkuMqQAAAAAAAAAAC4kAACeI2YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+const FIXTURE_VOICE_REF: VoiceAttachmentRef = {
+  voiceId: 'fixture:voice',
+  mediaType: 'audio/wav',
+  bytes: 36,
+  durationMs: 1200,
+  transcript: '这是 fixture 的语音识别文本',
 }
 
 /** Deterministic provider billing attached to fixture assistant messages. */
@@ -1215,6 +1227,18 @@ function logReferencesAttachment(log: readonly SessionEvent[], attachmentId: str
   return log.some(event => visit(event.data))
 }
 
+/** Fixture mirror of host session-scoped voice authorization. */
+function logReferencesVoice(log: readonly SessionEvent[], voiceId: string): boolean {
+  const visit = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(visit)
+    if (typeof value !== 'object' || value === null) return false
+    const record = value as Record<string, unknown>
+    if (record.voiceId === voiceId) return true
+    return Object.values(record).some(visit)
+  }
+  return log.some(event => visit(event.data))
+}
+
 /** Fixture mirror of first-party message extraction used by session-query. */
 function searchBlockText(block: ContentBlock): string[] {
   switch (block.type) {
@@ -1526,6 +1550,10 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
     String(FIXTURE_IMAGE_REF.attachmentId),
     { attachment: FIXTURE_IMAGE_REF, data: FIXTURE_IMAGE_DATA },
   ]])
+  const voices = new Map<string, { attachment: VoiceAttachmentRef; data: string }>([[
+    FIXTURE_VOICE_REF.voiceId,
+    { attachment: FIXTURE_VOICE_REF, data: FIXTURE_VOICE_DATA },
+  ]])
   /** Credential store double: set/unset flip the describe badge, values never read back. */
   const fixtureCredentials = new Map<string, true>([
     // The assembled fixture represents an already-configured shipped
@@ -1733,9 +1761,9 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         value: [
           { name: 'compact', description: 'fixture：压缩当前会话上下文' },
           { name: 'echo', description: 'fixture：回显参数', input: { hint: 'text to echo' } },
-          { name: 'goal', description: 'set or view the goal for a long-running task', input: { hint: '<objective>' } },
-          { name: 'permission', description: 'Switch the permission preset (sandbox mode + approval policy)', input: { hint: '<preset>' } },
-          { name: 'plan', description: 'Enter or leave plan mode', input: { hint: '[off|message]' } },
+          { name: 'goal', description: '设置或查看长期任务的完成目标', input: { hint: '<目标>' } },
+          { name: 'permission', description: '切换权限预设（沙箱模式 + 审批策略）', input: { hint: '<预设>' } },
+          { name: 'plan', description: '进入或退出计划模式', input: { hint: '[off|消息]' } },
         ],
       }
     },
@@ -1755,14 +1783,14 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         let result: CommandResult
         if (preset === '') {
           const current = permissionSelectOf(logOf(id)).currentValue
-          result = { kind: 'success', text: `current preset ${current} (available: ${Object.keys(PERMISSION_PRESETS).join(', ')})` }
+          result = { kind: 'success', text: `当前预设：${current}（可用：${Object.keys(PERMISSION_PRESETS).join(', ')}）` }
         } else if (spec === undefined) {
-          result = { kind: 'error', text: `unknown preset "${preset}" (available: ${Object.keys(PERMISSION_PRESETS).join(', ')})` }
+          result = { kind: 'error', text: `未知预设 "${preset}"（可用：${Object.keys(PERMISSION_PRESETS).join(', ')}）` }
         } else {
           if (permissionSelectOf(logOf(id)).currentValue !== preset) append(id, { type: 'permission/preset', data: { preset } })
           append(id, { type: 'sandbox/mode', data: { mode: spec.sandbox } })
           append(id, { type: 'approval/policy', data: { policy: spec.approval } })
-          result = { kind: 'success', text: `preset ${preset}` }
+          result = { kind: 'success', text: `已切换预设：${preset}` }
         }
         append(id, { type: 'command/done', data: { commandId, ...result } })
         return { ok: true, value: { commandId, result } }
@@ -1774,16 +1802,16 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         const current = backscanGoal(logOf(id))
         let text: string
         if (objective === '') {
-          text = current === null ? 'No goal is set. Usage: /goal <objective>' : `Current goal: ${current.goal.objective}`
+          text = current === null ? '当前未设置目标。用法：/goal <目标>' : `当前目标：${current.goal.objective}`
         } else if (current !== null && current.goal.phase !== 'complete') {
-          text = `A goal already exists (${current.goal.objective}). Clear it first.`
+          text = `已存在目标（${current.goal.objective}）。请先清除。`
         } else {
           const created = appendGoalChange(id, {
             kind: 'goal/change', version: 1, operation: 'create',
             goal: { id: `fx-goal-${logOf(id).length}`, revision: 1, objective, phase: 'active', maxGoalRounds: 256 },
             roundsStarted: 0, createdAt: Date.now(), updatedAt: Date.now(),
           })
-          text = `Goal created: ${created.goal.objective}`
+          text = `目标已创建：${created.goal.objective}`
         }
         const result: CommandResult = { kind: 'success', text }
         append(id, { type: 'command/done', data: { commandId, ...result } })
@@ -1794,10 +1822,10 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         compact: 'fixture：已压缩（假动作）',
         echo: args.trim(),
         plan: args.trim() === 'off'
-          ? (running ? 'Leaving plan mode (applies from the next step).' : 'Plan mode off.')
+          ? (running ? '正在退出计划模式（从下一步生效）。' : '计划模式已关闭。')
           : (running
-            ? 'Entering plan mode (applies from the next step). Use /plan off to leave.'
-            : 'Plan mode on. Use /plan off to leave.'),
+            ? '正在进入计划模式（从下一步生效）。使用 /plan off 退出。'
+            : '计划模式已开启。使用 /plan off 退出。'),
       }
       const text = name === undefined ? undefined : outcomes[name]
       if (name === undefined || text === undefined) return { ok: true, value: undefined }
@@ -2414,6 +2442,23 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         const userText = content.map(b => (b.type === 'text' ? b.text : '')).join('')
         const durable: ContentBlock[] = content.map((block) => {
           if (block.type === 'text') return block
+          if (block.type === 'voice') {
+            // Fixture voice admission mirrors the host: persist a content-addressed
+            // object and attach the canned transcript the frontend replays.
+            const voice: VoiceAttachmentRef = {
+              voiceId: `fixture:voice:${randomUuid()}`,
+              mediaType: block.mediaType,
+              bytes: Math.max(
+                1,
+                Math.floor(block.data.length * 3 / 4)
+                - (block.data.endsWith('==') ? 2 : block.data.endsWith('=') ? 1 : 0),
+              ),
+              ...(block.durationMs === undefined ? {} : { durationMs: block.durationMs }),
+              transcript: '这是 fixture 的语音识别文本',
+            }
+            voices.set(voice.voiceId, { attachment: voice, data: block.data })
+            return { type: 'voice', attachment: voice }
+          }
           const attachment: ImageAttachmentRef = {
             attachmentId: `fixture:${randomUuid()}` as AttachmentIdType,
             mediaType: block.mediaType,
@@ -2491,11 +2536,52 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         }
         return ok(request, stored)
       },
+      voice: (request) => {
+        const stored = voices.get(request.payload.voiceId)
+        if (stored === undefined) {
+          return err(request, {
+            code: 'attachment-error',
+            message: 'fixture voice missing',
+            details: { reason: 'VOICE_NOT_FOUND' },
+          })
+        }
+        if (!logReferencesVoice(
+          logs.get(request.payload.sessionId) ?? [],
+          request.payload.voiceId,
+        )) {
+          return err(request, {
+            code: 'attachment-error',
+            message: 'fixture voice is not referenced by this session',
+            details: { reason: 'VOICE_NOT_REFERENCED' },
+          })
+        }
+        return ok(request, stored)
+      },
       updateQueue: request => err(request, {
         code: 'queue-item-not-found',
         message: 'fixture has no pending queue item',
         details: { itemId: request.payload.itemId },
       }),
+      voiceAsr: (request) => {
+        // Fixture transcription: decode the base64 payload and return canned text
+        // so the speak-to-text gesture is exercisable without a real ASR service.
+        const payload = request.payload as { data?: string }
+        const empty = typeof payload.data !== 'string' || payload.data === ''
+        return ok(request, { text: empty ? null : '这是 fixture 的即时转写文本' })
+      },
+      voiceTts: (request) => {
+        // Fixture synthesis: a tiny silent mp3 payload so the voice-reply pill
+        // is playable without a real TTS engine.
+        const payload = request.payload as { text?: string }
+        const empty = typeof payload.text !== 'string' || payload.text === ''
+        return ok(request, empty
+          ? null
+          : { mediaType: 'audio/mpeg', data: FIXTURE_MP3_DATA, durationMs: 800 })
+      },
+      sendVoiceMessage: (request) => {
+        // Fixture: accept without persisting (unit tests assert the RPC surface).
+        return ok(request, { accepted: true as const })
+      },
       cancel: (request) => {
         const replay = replays.get(request.payload.sessionId)
         if (replay !== undefined) {
@@ -2962,6 +3048,9 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         models: fixtureModelGroups().flatMap(group => group.models.map(model => ({ id: model.id, name: model.name }))),
       }),
     },
+    balance: {
+      get: request => ok(request, { balance: { currency: 'CNY', total: '26.52', granted: '0.00', toppedUp: '26.52' } }),
+    },
     respond(message: ClientResponse): Promise<RpcReceipt> {
       // Same routing discipline as the host: rpcId first, then the payload's
       // audit correlation; a settled or unknown id is not-pending.
@@ -3087,6 +3176,10 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'session.fork': return this.api.sessions.fork(request)
       case 'session.prompt': return this.api.sessions.prompt(request)
       case 'session.attachment': return this.api.sessions.attachment(request)
+      case 'session.voice': return this.api.sessions.voice(request)
+      case 'session.voiceAsr': return this.api.sessions.voiceAsr(request)
+      case 'session.voiceTts': return this.api.sessions.voiceTts(request)
+      case 'session.sendVoiceMessage': return this.api.sessions.sendVoiceMessage(request)
       case 'session.updateQueue': return this.api.sessions.updateQueue(request)
       case 'session.cancel': return this.api.sessions.cancel(request)
       case 'subagent.list': return this.api.subagents.list(request)
@@ -3129,6 +3222,7 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'llm.providers': return this.api.llm.providers(request)
       case 'llm.models': return this.api.llm.models(request)
       case 'llm.discoverModels': return this.api.llm.discoverModels(request, signal)
+      case 'balance.get': return this.api.balance.get(request)
     }
   }
 

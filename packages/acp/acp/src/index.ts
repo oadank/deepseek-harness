@@ -152,11 +152,105 @@ export function apply(ctx: Context, config: AcpConfig): void {
   // Emit only committed assistant text. Raw chunks, reasoning, tools, plans,
   // titles, and retry markers are presentation or trace data and stay off the
   // automation wire.
+  //
+  // [本地改造 2026-08-13] 为让飞书/IM 客户端能看到思考层与工具层，额外推送：
+  //   assistant/chunk 的 reasoning-delta → agent_thought_chunk
+  //   assistant/chunk 的 text-delta      → agent_message_chunk（流式，不再等整块）
+  //   tool/call                          → tool_call（status:running + title）
+  //   tool/result                        → tool_call_update（status:completed + rawOutput 摘要）
+  // 这些是 ACP 标准 SessionUpdate 类型（见 @agentclientprotocol/sdk），客户端兼容。
   ctx.on('session/event', (session, event: SessionEvent) => {
     const record = sessions.get(session.header.id)
     if (record === undefined || record.agent.session !== session) return
     try {
+      // 流式思考/正文增量：assistant/chunk → reasoning-delta / text-delta
+      if (event.type === 'assistant/chunk') {
+        const chunk = event.data.chunk
+        if (chunk.type === 'reasoning-delta' && chunk.text.length > 0) {
+          notify({
+            sessionId: record.agent.session.id,
+            update: {
+              sessionUpdate: 'agent_thought_chunk',
+              content: { type: 'text', text: chunk.text },
+            },
+          })
+        } else if (chunk.type === 'text-delta' && chunk.text.length > 0) {
+          notify({
+            sessionId: record.agent.session.id,
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: chunk.text },
+            },
+          })
+        }
+      }
+      // 工具调用开始：tool/call → tool_call（status:running）
+      if (event.type === 'tool/call') {
+        let rawInput: unknown
+        try {
+          rawInput = JSON.parse(event.data.arguments)
+        } catch {
+          rawInput = event.data.arguments
+        }
+        notify({
+          sessionId: record.agent.session.id,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: String(event.data.callId),
+            title: event.data.name,
+            status: 'in_progress',
+            kind: 'execute',
+            rawInput,
+          },
+        })
+      }
+      // 工具调用完成：tool/result → tool_call_update（status:completed + 输出摘要）
+      if (event.type === 'tool/result') {
+        const out = event.data.message
+        const callId = (out as { toolCallId?: unknown }).toolCallId
+        let rawOutput: unknown = ''
+        try {
+          const blocks = (out as { content?: Array<{ type?: string; text?: string }> }).content
+          if (Array.isArray(blocks)) {
+            rawOutput = blocks
+              .filter(b => b?.type === 'text' && typeof b.text === 'string')
+              .map(b => b.text)
+              .join('\n')
+              .slice(0, 2000)
+          }
+        } catch {
+          rawOutput = ''
+        }
+        if (callId !== undefined) {
+          notify({
+            sessionId: record.agent.session.id,
+            update: {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: String(callId),
+              status: 'completed',
+              rawOutput,
+            },
+          })
+        }
+      }
       if (event.type === 'assistant/message') {
+        // 透传 usage 到 _meta（ACP 标准扩展点），供 agents-to-im 侧展示 Cache/上下文/余额。
+        // TokenUsage 字段直接映射，缺省补 0，避免下游 NaN。
+        const usageMeta = (() => {
+          const u = (event.data as { usage?: unknown }).usage as
+            | { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }
+            | undefined
+          if (u === undefined) return undefined
+          return {
+            usage: {
+              inputTokens: u.inputTokens ?? 0,
+              outputTokens: u.outputTokens ?? 0,
+              cacheReadTokens: u.cacheReadTokens ?? 0,
+              cacheWriteTokens: u.cacheWriteTokens ?? 0,
+              reasoningTokens: u.reasoningTokens ?? 0,
+            },
+          }
+        })()
         for (const block of event.data.message.content) {
           if (block.type === 'text' && block.text.length > 0) {
             notify({
@@ -164,6 +258,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
               update: {
                 sessionUpdate: 'agent_message_chunk',
                 content: { type: 'text', text: block.text },
+                ...(usageMeta === undefined ? {} : { _meta: usageMeta }),
               },
             })
           } else if (block.type === 'image') {

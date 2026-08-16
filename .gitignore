@@ -38,3 +38,7 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
+
+# 本机误创建的会话数据副本，绝不推送
+Usersoadan.dshdsh-botsessions/
+

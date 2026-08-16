@@ -95,8 +95,8 @@ describe('@deepseek-ai/dsh-command-goal registration', () => {
 
     expect(test.ctx.commands.list(test.agent)).toContainEqual({
       name: 'goal',
-      description: 'set or view the goal for a long-running task',
-      input: { hint: '[<objective>|clear|edit <objective>|pause|resume]' },
+      description: '设置或查看长期任务的完成目标',
+      input: { hint: '[<目标>|clear|edit <目标>|pause|resume]' },
     })
     expect(test.ctx.commands.find(test.agent, 'goal')).toBeDefined()
 
@@ -110,7 +110,7 @@ describe('/goal human command', () => {
     const test = await harness()
     await expect(run(test)).resolves.toEqual({
       kind: 'success',
-      text: 'No goal is currently set.\nUsage: /goal [<objective>|clear|edit <objective>|pause|resume]',
+      text: '当前未设置目标。\n用法：/goal [<目标>|clear|edit <目标>|pause|resume]',
     })
     expect(domainEvents(test.session)).toEqual([])
   })
@@ -119,17 +119,17 @@ describe('/goal human command', () => {
     const test = await harness()
     const created = await run(test, '\n  finish the release  ')
     expect(created.kind).toBe('success')
-    expect(created.text).toContain('Goal created\nStatus: active')
-    expect(created.text).toContain('Objective: finish the release')
-    expect(created.text).toContain('Rounds: 0/256')
-    expect(created.text).toContain('Activation: armed')
+    expect(created.text).toContain('目标已创建\n状态：进行中')
+    expect(created.text).toContain('目标：finish the release')
+    expect(created.text).toContain('轮次：0/256')
+    expect(created.text).toContain('激活：armed')
     expect(test.ctx.goals.get(test.agent)?.objective).toBe('finish the release')
     expect(domainEvents(test.session).map(event => event.type)).toEqual(['goal/change'])
 
     const count = domainEvents(test.session).length
     await expect(run(test, ' replacement')).resolves.toEqual({
       kind: 'error',
-      text: 'A goal is already active. Use /goal edit <objective> to change it or /goal clear before replacing it.',
+      text: '已有一个进行中的目标。使用 /goal edit <目标> 修改它，或用 /goal clear 清除后再替换。',
     })
     expect(domainEvents(test.session)).toHaveLength(count)
   })
@@ -144,24 +144,24 @@ describe('/goal human command', () => {
     const empty = await harness()
     const invalidEdit = await run(empty, ' edit')
     expect(invalidEdit.kind).toBe('error')
-    expect(invalidEdit.text).toContain('requires a replacement objective')
+    expect(invalidEdit.text).toContain('编辑目标需要提供替换目标内容')
     const missingEdit = await run(empty, ' edit replacement')
     expect(missingEdit.kind).toBe('error')
-    expect(missingEdit.text).toContain('/goal edit requires one')
+    expect(missingEdit.text).toContain('/goal edit 需要一个目标')
 
     const test = await harness()
     await run(test, ' first')
     const first = test.ctx.goals.get(test.agent)!
     const updated = await run(test, ' EDIT\n  second  ')
     expect(updated.kind).toBe('success')
-    expect(updated.text).toContain('Goal updated')
+    expect(updated.text).toContain('目标已更新')
     expect(test.ctx.goals.get(test.agent)).toMatchObject({ id: first.id, objective: 'second', revision: 2 })
 
     const current = test.ctx.goals.get(test.agent)!
     test.ctx.goals.complete(test.agent, ref(current))
     const replacement = await run(test, ' edit third')
     expect(replacement.kind).toBe('success')
-    expect(replacement.text).toContain('Goal created')
+    expect(replacement.text).toContain('目标已创建')
     expect(test.ctx.goals.get(test.agent)).toMatchObject({ objective: 'third', revision: 1 })
     expect(test.ctx.goals.get(test.agent)?.id).not.toBe(first.id)
   })
@@ -170,11 +170,11 @@ describe('/goal human command', () => {
     const test = await harness()
     const missingPause = await run(test, ' pause')
     expect(missingPause.kind).toBe('error')
-    expect(missingPause.text).toContain('/goal pause requires one')
+    expect(missingPause.text).toContain('/goal pause 需要一个目标')
     const missingResume = await run(test, ' resume')
     expect(missingResume.kind).toBe('error')
-    expect(missingResume.text).toContain('/goal resume requires one')
-    await expect(run(test, ' clear')).resolves.toEqual({ kind: 'success', text: 'No goal to clear.' })
+    expect(missingResume.text).toContain('/goal resume 需要一个目标')
+    await expect(run(test, ' clear')).resolves.toEqual({ kind: 'success', text: '没有需要清除的目标。' })
   })
 
   it('pauses, resumes, clears, and converts expected domain rejections to command errors', async () => {
@@ -183,17 +183,17 @@ describe('/goal human command', () => {
     const redundantResume = await run(test, ' RESUME')
     expect(redundantResume).toEqual({
       kind: 'error',
-      text: 'The goal command is not valid for the current state. Run /goal to view available commands.',
+      text: '目标命令对当前状态无效。运行 /goal 查看可用命令。',
     })
     const paused = await run(test, ' PAUSE')
     expect(paused.kind).toBe('success')
-    expect(paused.text).toContain('Goal paused')
+    expect(paused.text).toContain('目标已暂停')
     expect(test.ctx.goals.get(test.agent)).toMatchObject({ phase: 'paused', activation: 'disarmed' })
     const resumed = await run(test, ' resume')
     expect(resumed.kind).toBe('success')
-    expect(resumed.text).toContain('Goal resumed')
+    expect(resumed.text).toContain('目标已恢复')
     expect(test.ctx.goals.get(test.agent)).toMatchObject({ phase: 'active', activation: 'armed' })
-    await expect(run(test, ' clear')).resolves.toEqual({ kind: 'success', text: 'Goal cleared.' })
+    await expect(run(test, ' clear')).resolves.toEqual({ kind: 'success', text: '目标已清除。' })
     expect(test.ctx.goals.get(test.agent)).toBeUndefined()
   })
 
@@ -202,13 +202,13 @@ describe('/goal human command', () => {
     test.ctx.goals.create(test.agent, { objective: 'state matrix', maxGoalRounds: 1 })
     test.ctx.goals.disarm(test.agent)
     expect((await run(test)).text)
-      .toContain('Status: active\nObjective: state matrix\nRounds: 0/1\nActivation: disarmed')
+      .toContain('状态：进行中\n目标：state matrix\n轮次：0/1\n激活：disarmed')
     expect((await run(test)).text).toContain('/goal resume')
 
     let goal = test.ctx.goals.get(test.agent)!
     goal = test.ctx.goals.resume(test.agent, ref(goal))
     goal = test.ctx.goals.pause(test.agent, ref(goal))
-    expect((await run(test)).text).toContain('Status: paused')
+    expect((await run(test)).text).toContain('状态：已暂停')
 
     goal = test.ctx.goals.resume(test.agent, ref(goal))
     goal = test.ctx.goals.block(test.agent, ref(goal), {
@@ -216,14 +216,14 @@ describe('/goal human command', () => {
       message: 'Provider unavailable',
     })
     const blocked = await run(test)
-    expect(blocked.text).toContain('Status: blocked')
-    expect(blocked.text).toContain('Blocker: upstream-unavailable: Provider unavailable')
+    expect(blocked.text).toContain('状态：受阻')
+    expect(blocked.text).toContain('阻塞原因：upstream-unavailable: Provider unavailable')
 
     goal = test.ctx.goals.resume(test.agent, ref(goal))
     test.ctx.goals.complete(test.agent, ref(goal))
     const complete = await run(test)
-    expect(complete.text).toContain('Status: complete')
-    expect(complete.text).toContain('Commands: /goal <objective>, /goal clear')
+    expect(complete.text).toContain('状态：已完成')
+    expect(complete.text).toContain('可用命令：/goal <目标>、/goal clear')
   })
 
   it('does not turn unexpected implementation failures into expected command results', async () => {

@@ -66,12 +66,24 @@
 }
 
 .thinkBody {
+  max-height: 240px;
+  overflow-y: auto;
   padding: 4px 0 4px 22px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 14px;
   line-height: 24px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.thinkBody::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 6px;
+}
+
+.thinkBody::-webkit-scrollbar-track {
+  margin: 4px 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

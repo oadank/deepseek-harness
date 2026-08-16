@@ -28,6 +28,7 @@ function scriptedApi(overrides: {
   settings?: Partial<ApiProxy['settings']>
   credentials?: Partial<ApiProxy['credentials']>
   llm?: Partial<ApiProxy['llm']>
+  balance?: Partial<ApiProxy['balance']>
   respond?: ApiProxy['respond']
 } = {}): ApiProxy {
   async function *empty<F>(): AsyncGenerator<RpcRequest<F>> { /* no frames */ }
@@ -59,6 +60,13 @@ function scriptedApi(overrides: {
         attachment: { attachmentId: 'a' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
         data: 'AA==',
       }),
+      voice: r => ok(r, {
+        attachment: { voiceId: 'v', mediaType: 'audio/webm', bytes: 1 },
+        data: 'AA==',
+      }),
+      voiceAsr: r => ok(r, { text: 'stub transcription' }),
+      voiceTts: r => ok(r, { mediaType: 'audio/mpeg', data: 'SUQz', durationMs: 800 }),
+      sendVoiceMessage: r => ok(r, { accepted: true as const }),
       updateQueue: r => ok(r, { accepted: true as const }),
       cancel: r => ok(r, { accepted: true as const }),
       ...overrides.sessions,
@@ -127,6 +135,9 @@ function scriptedApi(overrides: {
       models: r => ok(r, { groups: [], failures: [] }),
       discoverModels: err,
       ...overrides.llm,
+    },
+    balance: {
+      get: r => ok(r, { balance: null }),
     },
     events: { mux: () => empty<MuxFrame>(), host: () => empty<HostFrame>(), ...overrides.events },
     respond: overrides.respond ?? (() => Promise.resolve({ accepted: false as const, reason: 'not-pending' as const })),
@@ -813,3 +824,4 @@ describe('config unary surface', () => {
     expect(response.result.error.code).toBe('bad-request')
   })
 })
+

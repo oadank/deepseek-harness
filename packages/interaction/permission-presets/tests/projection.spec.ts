@@ -73,7 +73,7 @@ describe('permissions projection unit', () => {
     session.append('sandbox/mode', { mode: 'read-only' })
     const value = ctx.sessionProjections.snapshot(session).values.permissions
     expect(value?.currentValue).toBe('custom')
-    expect(value?.options.at(-1)).toMatchObject({ value: 'custom', name: 'Custom' })
+    expect(value?.options.at(-1)).toMatchObject({ value: 'custom', name: '自定义' })
   })
 
   it('has no permissions key without the service, and drops it on unload (HMR safety)', async () => {
@@ -91,7 +91,7 @@ describe('/permission command', () => {
     const { ctx, session } = await harness()
     const { agent, inject } = await agentFor(ctx, session)
     const execution = await ctx.commands.execute(agent, '/permission danger-full-access', new AbortController().signal)
-    expect(execution?.result).toEqual({ kind: 'success', text: 'preset danger-full-access' })
+    expect(execution?.result).toEqual({ kind: 'success', text: '已切换预设：danger-full-access' })
     expect(ctx.permissionPresets.current(session.events)).toBe('danger-full-access')
     expect(inject.mock.calls[0]?.[0]).toMatchObject({
       content: [{
@@ -109,7 +109,7 @@ describe('/permission command', () => {
     const execution = await ctx.commands.execute(agent, '/permission', new AbortController().signal)
     expect(execution?.result).toEqual({
       kind: 'success',
-      text: 'current preset workspace-write (available: workspace-write, danger-full-access)',
+      text: '当前预设：workspace-write（可用：workspace-write, danger-full-access）',
     })
     expect(session.events.filter(event => event.type === 'permission/preset')).toHaveLength(1)
   })
@@ -125,7 +125,7 @@ describe('/permission command', () => {
     // preset`, which the row's own title already says.
     expect(execution?.result).toEqual({
       kind: 'error',
-      text: 'unknown preset "yolo" (available: workspace-write, danger-full-access)',
+      text: '未知预设 "yolo"（可用：workspace-write, danger-full-access）',
     })
     expect(session.events.filter(event =>
       event.type !== 'command/run' && event.type !== 'command/done')).toEqual(before)

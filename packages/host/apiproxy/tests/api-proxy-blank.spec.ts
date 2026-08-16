@@ -48,7 +48,7 @@ function appendStandalone(session: Session): void {
     commandId: CommandId('blank-cmd-1'), name: 'plan', args: '', source: { kind: 'user' },
   })
   session.append('plan/mode', { active: true })
-  session.append('command/done', { commandId: CommandId('blank-cmd-1'), kind: 'success', text: 'Plan mode on.' })
+  session.append('command/done', { commandId: CommandId('blank-cmd-1'), kind: 'success', text: '计划模式已开启。' })
   session.append('session/title', {
     title: 'standalone title', messageSeqs: [], source: { kind: 'fallback' },
   })

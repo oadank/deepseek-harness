@@ -90,7 +90,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }[T]
 ```
 
-Sources: [`packages/core/session/src/types.ts:336`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:343`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:372`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:404`](../packages/core/session/src/types.ts)
+Sources: [`packages/core/session/src/types.ts:353`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:360`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:389`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:421`](../packages/core/session/src/types.ts)
 
 ## Events
 
@@ -929,6 +929,34 @@ Source: [`packages/core/session/src/types.ts:243`](../packages/core/session/src/
 ```
 
 Source: [`packages/core/session/src/types.ts:264`](../packages/core/session/src/types.ts)
+
+### `voice/*`
+
+<a id="voicereply--log-only"></a>
+
+#### `voice/reply` — log-only
+
+```ts persistence-catalog
+/**
+ * [本地改造 2026-08-16] 助手侧语音回复：turn 完成后 host 把最后一条助手文本
+ * 合成 TTS 并落盘，作为一条独立持久语音消息（与用户语音消息同级）。前端
+ * 渲染为单独语音横条（复用 VoiceCard）。log-only：不进入模型历史重建。
+ */
+'voice/reply': {
+  /** The turn whose closing assistant text this reply speaks. */
+  turn: number
+  /** Opaque storage identifier of the synthesized audio object. */
+  voiceId: string
+  /** Audio container format of the stored object. */
+  mediaType: string
+  /** Exact encoded byte length. */
+  bytes: number
+  /** Recorder-style duration in milliseconds. */
+  durationMs?: number
+}
+```
+
+Source: [`packages/core/session/src/types.ts:338`](../packages/core/session/src/types.ts)
 
 ### `web/*`
 

@@ -10,7 +10,7 @@
     - tab "Chat" [selected]
     - tab "Trajectory"
 - img
-- text: "plan Plan mode on. Use /plan off to leave. Plan a small change: add a --greeting flag to a CLI. Do not read or write any files. Call exit_plan_mode with a short plan of at most five bullet points. Once the plan is approved, reply with the single word DONE and stop. {{clock}}"
+- text: "plan 计划模式已开启。使用 /plan off 退出。 Plan a small change: add a --greeting flag to a CLI. Do not read or write any files. Call exit_plan_mode with a short plan of at most five bullet points. Once the plan is approved, reply with the single word DONE and stop. {{clock}}"
 - button "Copy":
   - img
 - button "Context injection @deepseek-ai/dsh-system-prompt":

@@ -11,7 +11,7 @@ import type {
   TurnLocation, WorkspaceId,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { MessageId } from '@deepseek-ai/dsh-client-connection/client'
+import type { BalanceView, MessageId, PromptContentPart, VoiceAttachmentRef } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { ComposerBlock } from '../input/blocks.ts'
 import type {
@@ -363,6 +363,8 @@ export interface ChatNodeOwnerProps {
   forkAt: (seq: number) => void
   /** Resolve a session-authorized historical image for inline display. */
   loadImage: (attachment: ImageAttachmentRef) => Promise<string>
+  /** Resolve a session-authorized historical voice object for inline playback. */
+  loadVoice: (attachment: VoiceAttachmentRef) => Promise<string>
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
 }
 
@@ -434,6 +436,8 @@ export interface ConversationSessionInjected {
   }
   /** Release historical image URLs when this rendered session scope unmounts. */
   releaseSessionImages: (sessionId: SessionId) => void
+  /** Release historical voice URLs when this rendered session scope unmounts. */
+  releaseSessionVoices: (sessionId: SessionId) => void
   /** Bind the input machine's draft persistence mirror to the session store. */
   bindDraftMirror: (write: (text: string) => void) => () => void
 }
@@ -516,6 +520,35 @@ export interface ComposerBarInjected {
    * Resolves admission: false = rejected/unmatched/transport failure.
    */
   command: ((line: string) => Promise<boolean>) | undefined
+  /**
+   * 查询 DeepSeek 直连账户余额（模型按钮旁的余额指示）；非直连/无 key
+   * 返回 null。absent 仅当没有 session（组件据此隐藏）。
+   */
+  readBalance: (() => Promise<{ balance: BalanceView | null }>) | undefined
+  /**
+   * 发送一条录音语音消息（host 落盘后自动 ASR 转文本，agent 按文本回复）；
+   * absent 仅当没有 session。
+   * Resolves admission: false = rejected/transport failure.
+   * @param mode - queue or steer delivery, resolved by composer policy so the
+   *   user's busy-state preference (设置里的"排队/插队") applies to voice too.
+   */
+  sendVoice: ((part: Extract<PromptContentPart, { type: 'voice' }>, mode: InputSubmitMode) => Promise<boolean>) | undefined
+  /**
+   * 即时转写一条录音（"说话转文本"手势：上滑右侧松手时调用，结果作为普通
+   * 文本消息发送，音频不落库）；absent 仅当没有 session。
+   * @returns recognized text, or null when recognition failed.
+   */
+  transcribeVoice: ((part: Extract<PromptContentPart, { type: 'voice' }>) => Promise<string | null>) | undefined
+  /**
+   * 合成一条语音回复（本地 TTS 引擎），返回可直接播放的音频数据；
+   * absent 仅当没有 session。用于"语音铁律"自动回复和手动语音按钮。
+   * @returns encoded audio, or null when synthesis failed.
+   */
+  synthesizeVoice: ((text: string, provider?: string) => Promise<{
+    mediaType: string
+    data: string
+    durationMs?: number
+  } | null>) | undefined
   /**
    * Registrant hooks compartment: the renderer binds these to
    * useNotices/useLexicon (static absent sources without a session — hook
@@ -683,6 +716,17 @@ export interface ChatViewInjected {
   loadOlder: () => void
   /** Resolve a session-authorized historical image for inline display. */
   loadImage: (attachment: ImageAttachmentRef) => Promise<string>
+  /** Resolve a session-authorized historical voice object for inline playback. */
+  loadVoice: (attachment: VoiceAttachmentRef) => Promise<string>
+  /**
+   * 合成语音回复（本地 TTS；"语音铁律"：上一条用户消息是语音时，回复完成后
+   * 自动调用并播放）。返回可直接播放的音频数据；失败返回 null。
+   */
+  synthesizeVoice: ((text: string, provider?: string) => Promise<{
+    mediaType: string
+    data: string
+    durationMs?: number
+  } | null>) | undefined
   /** Hand a call off to the trajectory view: write the one-shot inspect target and switch tabs. */
   inspectCall: (callId: CallId) => void
   /**

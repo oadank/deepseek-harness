@@ -10,10 +10,10 @@
     - tab "Chat" [selected]
     - tab "Trajectory"
 - group "Command input": /goal Keep the composer context panels aligned
-- 'button "goal Goal created Status: active Objective: Keep the composer context panels aligned Rounds: 0/256 Activation: armed Commands: /goal edit <objective>, /goal pause, /goal clear"':
+- 'button "goal 目标已创建 状态：进行中 目标：Keep the composer context panels aligned 轮次：0/256 激活：armed 可用命令：/goal edit <目标>、/goal pause、/goal clear"':
   - img
   - img
-  - text: "goal Goal created Status: active Objective: Keep the composer context panels aligned Rounds: 0/256 Activation: armed Commands: /goal edit <objective>, /goal pause, /goal clear"
+  - text: "goal 目标已创建 状态：进行中 目标：Keep the composer context panels aligned 轮次：0/256 激活：armed 可用命令：/goal edit <目标>、/goal pause、/goal clear"
 - button "Context injection goal":
   - img
   - img

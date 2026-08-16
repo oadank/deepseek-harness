@@ -114,4 +114,40 @@ describe('ReasoningRow', () => {
     expect(view.container.querySelector('[class*="ioCard"]')).toBeNull()
     expect(view.container.querySelector('[class*="thinkBody"]')).not.toBeNull()
   })
+
+  it('keeps the height-capped expanded body scrolled to the streaming tail', () => {
+    const view = render(
+      <AssistantMarkdown
+        t={t}
+        blocks={[{ kind: 'reasoning', text: 'Inspect the session\nCheck persistence' }]}
+        streaming
+      />,
+    )
+    fireEvent.click(view.getByText('Think'))
+    const body = view.container.querySelector('[class*="thinkBody"]') as HTMLDivElement
+    expect(body).not.toBeNull()
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 900 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    })
+
+    view.rerender(
+      <AssistantMarkdown
+        t={t}
+        blocks={[{ kind: 'reasoning', text: 'Inspect the session\nCheck persistence\nNewest reasoning tokens' }]}
+        streaming
+      />,
+    )
+    expect(body.scrollTop).toBe(900)
+
+    view.rerender(
+      <AssistantMarkdown
+        t={t}
+        blocks={[{ kind: 'reasoning', text: 'Inspect the session\nCheck persistence\nNewest reasoning tokens' }]}
+        streaming={false}
+      />,
+    )
+    // Stream end leaves the reader's scroll position untouched.
+    expect(body.scrollTop).toBe(900)
+  })
 })

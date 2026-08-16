@@ -9,15 +9,41 @@ import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-ll
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { Context as PiContext, ImageContent, Message as PiMessage, TextContent, Tool as PiTool } from '@earendil-works/pi-ai'
 import { toPiAssistant } from './replay.ts'
+import { join } from 'node:path'
 
 /** Join the text blocks of a harness message. */
 function flattenText(message: Message): string {
   return message.content
+    .map(voiceAsText)
     .filter(block => block.type === 'text')
     .map(block => block.text)
     .join('')
 }
 
+/**
+ * [本地改造 2026-08-16] 把 voice 块转成文本：attachment.transcript 存在时直接给出
+ * 识别文本；否则输出本地语音文件路径——与 llm-deepseek serialize.ts 的 voiceAsText
+ * 同一策略，保证切换 provider（deepseek-official ↔ qwen/pi-ai）后语音识别行为一致。
+ */
+function voiceAsText(block: ContentBlock): ContentBlock {
+  if (block.type !== 'voice') return block
+  const ref = (block as { attachment?: { voiceId?: unknown; durationMs?: unknown; transcript?: unknown } }).attachment
+  const rawId = typeof ref?.voiceId === 'string' ? ref.voiceId : ''
+  const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
+  const transcript = typeof ref?.transcript === 'string' && ref.transcript.length > 0
+    ? ref.transcript
+    : null
+  const durationMs = typeof ref?.durationMs === 'number' ? ref.durationMs : null
+  const duration = durationMs === null ? '' : `（时长 ${Math.round(durationMs / 1000)} 秒）`
+  if (transcript !== null) {
+    return { type: 'text', text: `[用户发送了一条语音${duration}，识别内容：${transcript}]` }
+  }
+  const home = process.env.DSH_HOME ?? ''
+  const path = hex.length > 0 && home !== ''
+    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
+    : '(unknown)'
+  return { type: 'text', text: `[用户发送了一条语音${duration}，本地语音文件路径: ${path}]` }
+}
 
 /** Flatten text recursively inside one tool result. */
 function toolResultText(blocks: readonly ContentBlock[]): string {
@@ -36,6 +62,14 @@ async function userContent(
       case 'text':
         if (block.text.length > 0) content.push({ type: 'text', text: block.text })
         break
+      case 'voice': {
+        // [本地改造 2026-08-16] 语音块转文本（识别文本/本地路径），与文本块同路进模型。
+        const asText = voiceAsText(block)
+        if (asText.type === 'text' && asText.text.length > 0) {
+          content.push({ type: 'text', text: asText.text })
+        }
+        break
+      }
       case 'image': {
         const stored = await attachments.readImage(block.attachment)
         content.push({

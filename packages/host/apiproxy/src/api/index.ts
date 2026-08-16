@@ -15,6 +15,7 @@ import type { GoalsApi } from './goals.ts'
 import type { SettingsApi } from './settings.ts'
 import type { CredentialsApi } from './credentials.ts'
 import type { LlmApi } from './llm.ts'
+import type { BalanceApi } from './balance.ts'
 import type { DownloadsApi } from './downloads.ts'
 import type { ClientResponse, RpcReceipt } from './rpc.ts'
 
@@ -31,6 +32,8 @@ export interface ApiProxy {
   settings: SettingsApi
   credentials: CredentialsApi
   llm: LlmApi
+  /** DeepSeek 直连账户余额（辅助指示；非直连返回 null）。 */
+  balance: BalanceApi
   /** Host-only download surfaces (GET, no wire envelope); absent from IApiClient. */
   downloads: DownloadsApi
   /**
@@ -46,6 +49,7 @@ export type {
   HistoryEntry, ModelCatalogFailure, ModelCatalogModel, ModelProviderGroup, ModelReasoning,
   ModelReasoningEffort, ModelSelection, PromptContentPart, QueueAction, SessionModels,
   SessionListMetadata, SessionProjectionsBlock, SessionSearchItem, SessionsApi, SessionSummary,
+  VoiceAttachmentRef, VoiceMediaType,
 } from './sessions.ts'
 export type { DirectoryEntry, DirectoryListing, HostApi } from './host.ts'
 export type {
@@ -61,6 +65,7 @@ export type { GoalsApi, GoalId, GoalRef } from './goals.ts'
 export type { SettingsApi, SettingsNamespaceView, SettingsPathOpView, SettingsSecretView } from './settings.ts'
 export type { CredentialsApi, CredentialView } from './credentials.ts'
 export type { ConfigurableProviderView, DiscoveredModelView, LlmApi } from './llm.ts'
+export type { BalanceApi, BalanceView } from './balance.ts'
 export type { DownloadsApi } from './downloads.ts'
 export type { ApprovalResponsePayload } from './approvals.ts'
 

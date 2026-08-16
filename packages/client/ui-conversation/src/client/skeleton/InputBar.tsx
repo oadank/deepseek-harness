@@ -23,6 +23,7 @@ import type {} from '@deepseek-ai/dsh-goal/client'
 // wire types: apiproxy's sessions contract declares it, and client-runtime's
 // api-remotes import already places it in every client program.
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PromptContentPart } from '@deepseek-ai/dsh-client-connection/client'
 import type { ComposerAttachment, ComposerBarProps } from '../contract/slots.ts'
 import { deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
@@ -30,6 +31,7 @@ import {
   attachmentErrorText, attachmentRailLabels, dropOverlayLabels, imageSizeText, lightboxLabels,
 } from '../image-labels.ts'
 import { ContextMeter } from './ContextMeter.tsx'
+import { BalanceMeter } from './BalanceMeter.tsx'
 import { PermissionSelect } from './PermissionSelect.tsx'
 import css from './InputBar.module.css'
 
@@ -45,7 +47,7 @@ export type InputBarProps = ComposerBarProps
 
 export function InputBar({
   useSession, useInput, inputActions, keyboard, addImages, removeImage, draftImages,
-  resolveSubmitMode, toggleCommandMenu, stop, command, t,
+  resolveSubmitMode, toggleCommandMenu, stop, command, readBalance, sendVoice, transcribeVoice, t,
   renderSlot, useNotices, useLexicon, useMenuLauncher,
   useProjection, sessionId, variant, disabled: inert = false, blocked,
   workspacePickerOpen = false, onRequestWorkspace,
@@ -109,6 +111,146 @@ export function InputBar({
   // IME guard: composition Enter picks a candidate, it must not send. The ref outlives renders;
   // clearing is deferred one tick because Safari delivers the closing keydown AFTER compositionend.
   const composingRef = useRef(false)
+  // [本地改造 2026-08-16] 附件"📎"按钮：隐藏 file input，选图走 intakeImages（同拖拽/粘贴路径）
+  const attachInputRef = useRef<HTMLInputElement | null>(null)
+  // [本地改造 2026-08-16] 语音按钮（点击式）：点一下开始录音，再点停止并发送，
+  // 录音中显示秒数与取消。MediaRecorder 录音 → base64 voice part。
+  // 注：按住说话/上滑手势（微信式）在移动端与 Edge 不可用——getUserMedia 异步
+  // 启动有数百 ms 延迟，短按松手时录音尚未开始；触摸/移出还会触发 pointerleave
+  // 提前取消。手势代码已移除，交互固定为点击式（代码保留在 git 历史）。
+  const [recording, setRecording] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const timerRef = useRef<number | null>(null)
+  const gestureRef = useRef<'send' | 'cancel' | 'text'>('send')
+  const recordingSecondsRef = useRef(0)
+  const MAX_RECORDING_SECONDS = 60
+  const voiceSupported = typeof navigator !== 'undefined'
+    && navigator.mediaDevices?.getUserMedia !== undefined
+    && typeof MediaRecorder !== 'undefined'
+  const finishRecording = useCallback((): void => {
+    if (timerRef.current !== null) {
+      window.clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+    for (const track of streamRef.current?.getTracks() ?? []) track.stop()
+    streamRef.current = null
+    recorderRef.current = null
+    setRecording(false)
+    setRecordingSeconds(0)
+  }, [])
+  /** Convert one recorded blob into the wire voice part (base64 + media type). */
+  const voicePartOf = useCallback((blob: Blob): Extract<PromptContentPart, { type: 'voice' }> | null => {
+    const mediaType = (blob.type.split(';')[0] ?? '') as 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/wav'
+    if (mediaType !== 'audio/webm' && mediaType !== 'audio/ogg' && mediaType !== 'audio/mp4' && mediaType !== 'audio/wav') {
+      showToast(t('voice.unsupportedFormat'))
+      return null
+    }
+    return {
+      type: 'voice',
+      mediaType,
+      data: '', // filled by the async base64 conversion below
+    }
+  }, [showToast, t])
+  const sendRecordedVoice = useCallback((blob: Blob): void => {
+    if (sendVoice === undefined) return
+    const part = voicePartOf(blob)
+    if (part === null) return
+    // [本地改造 2026-08-16] 语音发送走 composer 策略解析的 mode（设置里的
+    // 排队/插队偏好），与文本/转文字发送一致——不再硬编码排队。
+    const mode = resolveSubmitMode(running, 'enter', subagent === null)
+    void blob.arrayBuffer().then((buffer) => {
+      const bytes = new Uint8Array(buffer)
+      let binary = ''
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+      }
+      const durationMs = recordingSecondsRef.current * 1000
+      return sendVoice({
+        ...part,
+        data: btoa(binary),
+        ...(durationMs > 0 ? { durationMs } : {}),
+      }, mode)
+    }).then((accepted) => {
+      if (accepted === false) showToast(t('voice.sendFailed'))
+    }).catch(() => {
+      showToast(t('voice.sendFailed'))
+    })
+  }, [sendVoice, voicePartOf, showToast, resolveSubmitMode, running, subagent])
+  /** 上滑右侧转文本：ASR 结果填入 draft 并立即以文本消息发送（音频不落库）。 */
+  const sendRecordedAsText = useCallback((blob: Blob): void => {
+    if (transcribeVoice === undefined || keyboard === undefined) return
+    const part = voicePartOf(blob)
+    if (part === null) return
+    showToast(t('voice.recognizing'))
+    void blob.arrayBuffer().then((buffer) => {
+      const bytes = new Uint8Array(buffer)
+      let binary = ''
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+      }
+      const durationMs = recordingSecondsRef.current * 1000
+      return transcribeVoice({
+        ...part,
+        data: btoa(binary),
+        ...(durationMs > 0 ? { durationMs } : {}),
+      })
+    }).then((text) => {
+      if (text === null || text === '') {
+        showToast(t('voice.recognitionFailed'))
+        return
+      }
+      keyboard.setDraft(text)
+      keyboard.submit(resolveSubmitMode(running, 'enter', subagent === null))
+    }).catch(() => {
+      showToast(t('voice.recognitionFailed'))
+    })
+  }, [transcribeVoice, voicePartOf, keyboard, showToast, t, resolveSubmitMode, running, subagent])
+  const stopRecording = useCallback((gesture: 'send' | 'cancel' | 'text'): void => {
+    const recorder = recorderRef.current
+    if (recorder === null || recorder.state === 'inactive') return
+    gestureRef.current = gesture
+    recorder.stop()
+    finishRecording()
+  }, [finishRecording])
+  const startRecording = useCallback(async (): Promise<void> => {
+    if (sendVoice === undefined) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream)
+      chunksRef.current = []
+      gestureRef.current = 'send'
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data)
+      }
+      recorder.onstop = () => {
+        const gesture = gestureRef.current
+        if (gesture === 'cancel') return
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+        if (blob.size === 0) {
+          showToast(t('voice.empty'))
+          return
+        }
+        if (gesture === 'text') sendRecordedAsText(blob)
+        else sendRecordedVoice(blob)
+      }
+      recorder.start()
+      recorderRef.current = recorder
+      streamRef.current = stream
+      recordingSecondsRef.current = 0
+      setRecordingSeconds(0)
+      setRecording(true)
+      timerRef.current = window.setInterval(() => {
+        recordingSecondsRef.current += 1
+        setRecordingSeconds(recordingSecondsRef.current)
+        if (recordingSecondsRef.current >= MAX_RECORDING_SECONDS) stopRecording('send')
+      }, 1000)
+    } catch {
+      showToast(t('voice.micUnavailable'))
+    }
+  }, [sendVoice, sendRecordedVoice, sendRecordedAsText, showToast, stopRecording])
   const onCompositionStart = (): void => {
     composingRef.current = true
   }
@@ -447,6 +589,13 @@ export function InputBar({
     })()
     if (rejected !== null) showToast(rejected)
   }, [addImages, attachments, imageLimits, showToast, t])
+  // [本地改造 2026-08-16] 附件"📎"按钮：打开文件选择 → intakeImages（图片消息链路，host 无视觉时自动转 vision-qa）
+  const pickImages = useCallback((): void => { attachInputRef.current?.click() }, [])
+  const onAttachPicked = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
+    const files = Array.from(event.target.files ?? [])
+    if (files.length > 0) intakeImages(files)
+    event.target.value = ''
+  }, [intakeImages])
 
   // Whole-page file-drop intake (DeepSeek Chat behavior): the listeners live
   // on the document so a drop anywhere over the window adds images, not only
@@ -531,6 +680,13 @@ export function InputBar({
   const keepFocus = (e: MouseEvent<HTMLButtonElement>): void => {
     e.preventDefault()
     inputRef.current?.focus({ preventScroll: true })
+  }
+
+  // [本地改造 2026-08-16] 语音按钮/取消按钮：按下时**释放**文本输入框焦点
+  // （blur），移动端点语音不会弹输入法；`preventScroll` 同理保持滚动位置。
+  const releaseFocus = (e: MouseEvent<HTMLButtonElement>): void => {
+    e.preventDefault()
+    inputRef.current?.blur()
   }
 
   const onToggleCommandMenu = (): void => {
@@ -731,20 +887,76 @@ export function InputBar({
         </div>
         <div className={css.row}>
           <div className={css.tools}>
-            <Tooltip label={t('input.commands')} side="top" delayMs={500}>
+            {/* [本地改造 2026-08-16] 附件上传按钮：选图 → 图片附件 → 发送后 host 无视觉自动转 vision-qa */}
+            <button
+              type="button"
+              className={css.add}
+              aria-label="添加图片"
+              disabled={locked || addImages === undefined}
+              onMouseDown={releaseFocus}
+              onClick={pickImages}
+            >
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+                <rect x="2.5" y="3.5" width="11" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4"/>
+                <circle cx="6" cy="7.5" r="1.5" fill="currentColor"/>
+                <path d="M3.5 11.5 L6.5 8.5 L9 10.5 L11.5 8 L13.5 10.5" stroke="currentColor" strokeWidth="1.2" fill="none"/>
+              </svg>
+            </button>
+            <input ref={attachInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={onAttachPicked} />
+            {/* [本地改造 2026-08-16] 语音按钮（点击式）：点一下开始录音，再点停止并发送；录音中显示秒数与取消。 */}
+            {voiceSupported && (
+              <button
+                type="button"
+                className={clsx(css.add, recording && css.voiceRecording)}
+                aria-label={recording ? t('voice.stopAndSend') : t('voice.start')}
+                data-recording={recording || undefined}
+                disabled={locked || machineBusy || sendVoice === undefined}
+                onMouseDown={releaseFocus}
+                onClick={() => {
+                  if (recording) stopRecording('send')
+                  else void startRecording()
+                }}
+              >
+                {recording
+                  ? (
+                    <span className={css.voiceTimer}>
+                      <span className={css.voiceDot} aria-hidden />
+                      {recordingSeconds}s
+                    </span>
+                  )
+                  : (
+                    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+                      <path d="M8 1.5C6.895 1.5 6 2.395 6 3.5V8C6 9.105 6.895 10 8 10C9.105 10 10 9.105 10 8V3.5C10 2.395 9.105 1.5 8 1.5Z" fill="currentColor"/>
+                      <path d="M3.5 7.5V8C3.5 10.485 5.515 12.5 8 12.5C10.485 12.5 12.5 10.485 12.5 8V7.5H14V8C14 11.087 11.683 13.615 8.75 13.936V15.5H7.25V13.936C4.317 13.615 2 11.087 2 8V7.5H3.5Z" fill="currentColor"/>
+                    </svg>
+                  )}
+              </button>
+            )}
+            {recording && (
               <button
                 type="button"
                 className={css.add}
-                aria-label={t('input.commands')}
-                aria-haspopup="listbox"
-                aria-expanded={commandMenuOpen}
-                disabled={locked || toggleCommandMenu === undefined}
-                onMouseDown={keepFocus}
-                onClick={onToggleCommandMenu}
+                aria-label={t('voice.cancel')}
+                onMouseDown={releaseFocus}
+                onClick={() => { stopRecording('cancel') }}
               >
-                <IconPlusOutline16 size={14} />
+                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+                  <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+                </svg>
               </button>
-            </Tooltip>
+            )}
+            <button
+              type="button"
+              className={css.add}
+              aria-label={t('input.commands')}
+              aria-haspopup="listbox"
+              aria-expanded={commandMenuOpen}
+              disabled={locked || toggleCommandMenu === undefined}
+              onMouseDown={releaseFocus}
+              onClick={onToggleCommandMenu}
+            >
+              <IconPlusOutline16 size={14} />
+            </button>
             <div className={css.modes}>
               {accessSelect}
               {renderSlot('conversation.input.plan', { locked })}
@@ -754,6 +966,7 @@ export function InputBar({
           <div className={css.trailing}>
             {rightItems}
             {renderSlot('conversation.input.model', { locked: modelSeatLocked })}
+            <BalanceMeter readBalance={readBalance} running={running} />
             <ContextMeter useProjection={useProjection} t={t} />
             {interruptible && (
               <Tooltip label={t('input.stop')} side="top" delayMs={500}>

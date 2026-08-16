@@ -68,6 +68,12 @@ export class FakeApiClient implements IApiClient {
   onPrompt: (payload: unknown) => Promise<RpcResponse<{ accepted: true }>> = () => Promise.resolve(ok({ accepted: true as const }))
   onAttachment: (payload: unknown) => Promise<RpcResponse<{ attachment: { attachmentId: never; mediaType: 'image/png'; bytes: number; width: number; height: number }; data: string }>> =
     () => Promise.resolve(ok({ attachment: { attachmentId: 'a' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 }, data: 'AA==' }))
+  onVoice: (payload: unknown) => Promise<RpcResponse<{ attachment: { voiceId: never; mediaType: 'audio/webm'; bytes: number; durationMs?: number; transcript?: string }; data: string }>> =
+    () => Promise.resolve(ok({ attachment: { voiceId: 'v' as never, mediaType: 'audio/webm', bytes: 1 }, data: 'AA==' }))
+  onVoiceAsr: (payload: unknown) => Promise<RpcResponse<{ text: string | null }>> =
+    () => Promise.resolve(ok({ text: 'fixture text' }))
+  onVoiceTts: (payload: unknown) => Promise<RpcResponse<{ mediaType: string; data: string; durationMs?: number } | null>> =
+    () => Promise.resolve(ok({ mediaType: 'audio/mpeg', data: 'SUQz', durationMs: 800 }))
   onUpdateQueue: (payload: unknown) => Promise<RpcResponse<{ accepted: true }>> = () => Promise.resolve(ok({ accepted: true as const }))
   onCancel: (payload: unknown) => Promise<RpcResponse<{ accepted: true }>> = () => Promise.resolve(ok({ accepted: true as const }))
   onDescribe: (payload: unknown) => Promise<RpcResponse<{
@@ -119,6 +125,12 @@ export class FakeApiClient implements IApiClient {
     fork: (payload: unknown) => this.record('session.fork', payload, this.onFork(payload)),
     prompt: (payload: unknown) => this.record('session.prompt', payload, this.onPrompt(payload)),
     attachment: (payload: unknown) => this.record('session.attachment', payload, this.onAttachment(payload)),
+    voice: (payload: unknown) => this.record('session.voice', payload, this.onVoice(payload)),
+    voiceAsr: (payload: unknown) => this.record('session.voiceAsr', payload, this.onVoiceAsr(payload)),
+    voiceTts: (payload: unknown) => this.record('session.voiceTts', payload, this.onVoiceTts(payload)),
+    sendVoiceMessage: (payload: unknown) => this.record(
+      'session.sendVoiceMessage', payload, Promise.resolve(ok({ accepted: true as const })),
+    ),
     updateQueue: (payload: unknown) => this.record('session.updateQueue', payload, this.onUpdateQueue(payload)),
     cancel: (payload: unknown) => this.record('session.cancel', payload, this.onCancel(payload)),
   }
@@ -224,6 +236,10 @@ export class FakeApiClient implements IApiClient {
     discoverModels: payload => this.record('llm.discoverModels', payload, Promise.resolve(ok({ models: [] }))),
   }
 
+  readonly balance: IApiClient['balance'] = {
+    get: payload => this.record('balance.get', payload, Promise.resolve(ok({ balance: null }))),
+  }
+
   /** When true, streams never fire onOpen (misbehaving-carrier material for the handshake timeout guard). */
   suppressStreamOpen = false
 
@@ -311,3 +327,4 @@ export class FakeApiClient implements IApiClient {
     }
   }
 }
+

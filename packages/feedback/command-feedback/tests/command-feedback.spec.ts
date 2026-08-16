@@ -109,8 +109,8 @@ describe('@deepseek-ai/dsh-command-feedback registration', () => {
 
     expect(test.ctx.commands.list(test.agent)).toContainEqual({
       name: 'feedback',
-      description: 'record feedback about this session',
-      input: { hint: '<text>' },
+      description: '记录对本会话的反馈',
+      input: { hint: '<内容>' },
     })
     expect(test.ctx.commands.find(test.agent, 'feedback')).toMatchObject({ recordInput: false })
 
@@ -124,7 +124,7 @@ describe('/feedback human command', () => {
     const test = await harness()
     await expect(run(test, ' the diff view is unreadable')).resolves.toEqual({
       kind: 'success',
-      text: `Feedback recorded for session ${test.session.id}\nAnonymous user: ${USER_ID}. Session sharing is not configured.`,
+      text: `已记录对会话 ${test.session.id} 的反馈\n匿名用户：${USER_ID}。会话共享未配置。`,
     })
     expect(feedbackTexts(test.session)).toEqual(['the diff view is unreadable'])
     const commandRun = test.session.events.find(event => event.type === 'command/run')
@@ -172,8 +172,8 @@ describe('/feedback human command', () => {
       test.ctx.commands.execute(test.agent, '/feedback second', signal),
     ])
     expect(settled.map(item => item?.result)).toEqual([
-      { kind: 'success', text: `Feedback recorded for session ${test.session.id}\nAnonymous user: ${USER_ID}. Session sharing is not configured.` },
-      { kind: 'success', text: `Feedback recorded for session ${test.session.id}\nAnonymous user: ${USER_ID}. Session sharing is not configured.` },
+      { kind: 'success', text: `已记录对会话 ${test.session.id} 的反馈\n匿名用户：${USER_ID}。会话共享未配置。` },
+      { kind: 'success', text: `已记录对会话 ${test.session.id} 的反馈\n匿名用户：${USER_ID}。会话共享未配置。` },
     ])
     expect(feedbackTexts(test.session)).toEqual(['first', 'second'])
   })
@@ -182,7 +182,7 @@ describe('/feedback human command', () => {
     const test = await harness('full')
     await expect(run(test, ' everything shared')).resolves.toEqual({
       kind: 'success',
-      text: `Feedback recorded for session ${test.session.id}\nAnonymous user: ${USER_ID}. Session sharing is enabled.`,
+      text: `已记录对会话 ${test.session.id} 的反馈\n匿名用户：${USER_ID}。会话共享已开启。`,
     })
     expect(feedbackTexts(test.session)).toEqual(['everything shared'])
   })
@@ -191,7 +191,7 @@ describe('/feedback human command', () => {
     const test = await harness('feedback-only')
     await expect(run(test, ' gated sharing')).resolves.toEqual({
       kind: 'success',
-      text: `Feedback recorded for session ${test.session.id}\nAnonymous user: ${USER_ID}. Session sharing is feedback-gated; recording feedback releases the session prefix for sharing.`,
+      text: `已记录对会话 ${test.session.id} 的反馈\n匿名用户：${USER_ID}。会话共享受反馈门控；记录反馈会释放会话前缀用于共享。`,
     })
     expect(feedbackTexts(test.session)).toEqual(['gated sharing'])
   })
@@ -200,7 +200,7 @@ describe('/feedback human command', () => {
     const test = await harness('disabled')
     await expect(run(test, ' local only')).resolves.toEqual({
       kind: 'success',
-      text: `Feedback recorded for session ${test.session.id}\nAnonymous user: ${USER_ID}. Session sharing is disabled.`,
+      text: `已记录对会话 ${test.session.id} 的反馈\n匿名用户：${USER_ID}。会话共享已关闭。`,
     })
     expect(feedbackTexts(test.session)).toEqual(['local only'])
   })
@@ -221,7 +221,7 @@ describe('/feedback human command', () => {
     const test = await harness()
     const expected = {
       kind: 'error',
-      text: 'Feedback text is required. Usage: /feedback <text>',
+      text: '请输入反馈内容。用法：/feedback <内容>',
     }
     await expect(run(test)).resolves.toEqual(expected)
     await expect(run(test, '   \n\t ')).resolves.toEqual(expected)

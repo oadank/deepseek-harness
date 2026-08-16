@@ -247,6 +247,7 @@ export function apply(ctx: Context): void {
       return {
         views,
         releaseSessionImages: (id) => { conversation.releaseSessionImages(id) },
+        releaseSessionVoices: (id) => { conversation.releaseSessionVoices(id) },
         bindDraftMirror: write => inputHub.shell(sessionId).bindMirror(write),
       }
     },
@@ -297,6 +298,10 @@ export function apply(ctx: Context): void {
           toggleCommandMenu: undefined,
           stop: undefined,
           command: undefined,
+          readBalance: undefined,
+          sendVoice: undefined,
+          transcribeVoice: undefined,
+          synthesizeVoice: undefined,
           hooks: { notices: ABSENT_NOTICES, lexicon: ABSENT_LEXICON, menuLauncher: ABSENT_MENU_LAUNCHER },
         }
       }
@@ -351,6 +356,42 @@ export function apply(ctx: Context): void {
           const result = await session.command(line)
           return result.ok && result.value.matched
         },
+        readBalance: async () => {
+          const connection = ctx.get('connection') as { api: import('@deepseek-ai/dsh-client-connection/client').IApiClient } | undefined
+          if (connection === undefined) return { balance: null }
+          const response = await connection.api.balance.get({ sessionId })
+          if (!response.result.ok) return { balance: null }
+          return response.result.value
+        },
+        sendVoice: async (part, mode) => {
+          const session = sessions.binding(sessionId)?.session
+          if (session === undefined) return false
+          const result = await session.prompt([part], mode)
+          return result.ok
+        },
+        transcribeVoice: async (part) => {
+          const connection = ctx.get('connection') as { api: import('@deepseek-ai/dsh-client-connection/client').IApiClient } | undefined
+          if (connection === undefined) return null
+          const response = await connection.api.sessions.voiceAsr({
+            sessionId,
+            mediaType: part.mediaType,
+            data: part.data,
+            ...(part.durationMs === undefined ? {} : { durationMs: part.durationMs }),
+          })
+          if (!response.result.ok) return null
+          return response.result.value.text
+        },
+        synthesizeVoice: async (text, provider) => {
+          const connection = ctx.get('connection') as { api: import('@deepseek-ai/dsh-client-connection/client').IApiClient } | undefined
+          if (connection === undefined) return null
+          const response = await connection.api.sessions.voiceTts({
+            sessionId,
+            text,
+            ...(provider === undefined || provider === '' ? {} : { provider }),
+          })
+          if (!response.result.ok) return null
+          return response.result.value
+        },
         hooks: {
           notices: shell.notices,
           lexicon: shell.lexicon,
@@ -401,6 +442,18 @@ export function apply(ctx: Context): void {
         },
         loadOlder: () => { void scoped.loadOlder() },
         loadImage: attachment => conversation.resolveImage(sessionId, attachment),
+        loadVoice: attachment => conversation.resolveVoice(sessionId, attachment),
+        synthesizeVoice: async (text, provider) => {
+          const connection = ctx.get('connection') as { api: import('@deepseek-ai/dsh-client-connection/client').IApiClient } | undefined
+          if (connection === undefined) return null
+          const response = await connection.api.sessions.voiceTts({
+            sessionId,
+            text,
+            ...(provider === undefined || provider === '' ? {} : { provider }),
+          })
+          if (!response.result.ok) return null
+          return response.result.value
+        },
         // Unregistered 'trajectory' id is safe: the tab ring falls back to
         // the first view, and the untouched inspect target stays inert.
         inspectCall: (callId) => {

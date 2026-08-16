@@ -13,6 +13,7 @@ import type { GoalsApi } from './goals.ts'
 import type { SettingsApi } from './settings.ts'
 import type { CredentialsApi } from './credentials.ts'
 import type { LlmApi } from './llm.ts'
+import type { BalanceApi } from './balance.ts'
 import type { SubagentsApi } from './subagents.ts'
 import type { RpcResponse } from './rpc.ts'
 
@@ -32,6 +33,10 @@ export interface RpcMethodMap {
   'session.fork': SessionsApi['fork']
   'session.prompt': SessionsApi['prompt']
   'session.attachment': SessionsApi['attachment']
+  'session.voice': SessionsApi['voice']
+  'session.voiceAsr': SessionsApi['voiceAsr']
+  'session.voiceTts': SessionsApi['voiceTts']
+  'session.sendVoiceMessage': SessionsApi['sendVoiceMessage']
   'session.updateQueue': SessionsApi['updateQueue']
   'session.cancel': SessionsApi['cancel']
   'subagent.list': SubagentsApi['list']
@@ -74,6 +79,7 @@ export interface RpcMethodMap {
   'llm.providers': LlmApi['providers']
   'llm.models': LlmApi['models']
   'llm.discoverModels': LlmApi['discoverModels']
+  'balance.get': BalanceApi['get']
 }
 
 /** Business request payload of method K (reaches through the RpcRequest narrow form to payload). */

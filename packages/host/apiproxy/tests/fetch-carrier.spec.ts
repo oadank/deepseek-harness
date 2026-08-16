@@ -102,6 +102,21 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
           result: { ok: true, value: { attachment: { attachmentId: 'a' as never, mediaType: 'image/png' as const, bytes: 1, width: 1, height: 1 }, data: 'AA==' } },
         }
       },
+      async voice(request) {
+        return {
+          rpcId: request.rpcId,
+          result: { ok: true, value: { attachment: { voiceId: 'v', mediaType: 'audio/webm' as const, bytes: 1 }, data: 'AA==' } },
+        }
+      },
+      async voiceAsr(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { text: 'stub transcription' } } }
+      },
+      async voiceTts(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { mediaType: 'audio/mpeg', data: 'SUQz', durationMs: 800 } } }
+      },
+      async sendVoiceMessage(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { accepted: true as const } } }
+      },
       async updateQueue(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { accepted: true as const } } }
       },
@@ -280,6 +295,11 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       },
       async discoverModels(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { models: [] } } }
+      },
+    },
+    balance: {
+      async get(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { balance: null } } }
       },
     },
     events: {
@@ -803,3 +823,4 @@ describe('resolveBase', () => {
     }
   })
 })
+

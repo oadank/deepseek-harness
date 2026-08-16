@@ -14,6 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // method) instead of the standalone helper.
 import type { ISessions, SessionFace, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import type { VoiceAttachmentRef } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ComposerAttachment } from './contract/slots.ts'
 import type { QueueAction, QueueItemId } from './contract/queue.ts'
 import type { ComposerBlocks } from './input/blocks.ts'
@@ -74,6 +75,12 @@ interface ImageUrlEntry {
   readonly pending: Promise<string>
 }
 
+interface VoiceUrlEntry {
+  readonly sessionId: SessionId
+  readonly generation: number
+  readonly pending: Promise<string>
+}
+
 /** Unsupported browser-declared image type, localized by the UI boundary. */
 export class UnsupportedImageMediaTypeError extends Error {
   /** Browser-declared MIME value, possibly empty. */
@@ -97,6 +104,9 @@ export class ConversationController extends Service implements IConversation {
   private readonly imageUrls = new Map<string, ImageUrlEntry>()
   private readonly imageGenerations = new Map<SessionId, number>()
   private readonly createdImageUrls = new Set<string>()
+  private readonly voiceUrls = new Map<string, VoiceUrlEntry>()
+  private readonly voiceGenerations = new Map<SessionId, number>()
+  private readonly createdVoiceUrls = new Set<string>()
   private disposed = false
 
   /**
@@ -114,9 +124,13 @@ export class ConversationController extends Service implements IConversation {
       this.disposed = true
       for (const url of this.createdImageUrls) revokePreview(url)
       this.createdImageUrls.clear()
+      for (const url of this.createdVoiceUrls) revokePreview(url)
+      this.createdVoiceUrls.clear()
       this.draftAttachments.clear()
       this.imageUrls.clear()
       this.imageGenerations.clear()
+      this.voiceUrls.clear()
+      this.voiceGenerations.clear()
     }, 'conversation attachment URL cache')
   }
 
@@ -255,6 +269,63 @@ export class ConversationController extends Service implements IConversation {
       this.imageUrls.delete(key)
       void entry.pending.then((url) => {
         if (!this.createdImageUrls.delete(url)) return
+        revokePreview(url)
+      }, () => {
+        // A failed or invalidated load owns no object URL.
+      })
+    }
+  }
+
+  /**
+   * Resolve and cache one session-authorized historical voice URL.
+   * @param sessionId - owning session authorization scope.
+   * @param attachment - durable voice reference.
+   * @returns browser URL valid until its rendered session is released.
+   */
+  resolveVoice(sessionId: SessionId, attachment: VoiceAttachmentRef): Promise<string> {
+    if (this.disposed) return Promise.reject(new Error('conversation.resolveVoice: service is disposed'))
+    const key = `${sessionId}:${attachment.voiceId}`
+    const cached = this.voiceUrls.get(key)
+    if (cached !== undefined) return cached.pending
+    const generation = this.voiceGenerations.get(sessionId) ?? 0
+    const session = this.requireSessions().binding(sessionId)?.session
+    if (session === undefined) {
+      return Promise.reject(new Error(`conversation.resolveVoice: unknown session "${sessionId}"`))
+    }
+    const pending = session.readVoice(attachment.voiceId)
+      .then((result) => {
+        if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+        if (this.disposed) throw new Error('conversation.resolveVoice: service was disposed before loading completed')
+        if ((this.voiceGenerations.get(sessionId) ?? 0) !== generation) {
+          throw new Error('historical voice scope was released before loading completed')
+        }
+        if (typeof URL.createObjectURL !== 'function') {
+          return `data:${result.value.attachment.mediaType};base64,${bytesToBase64(result.value.data)}`
+        }
+        const bytes = Uint8Array.from(result.value.data)
+        const url = URL.createObjectURL(new Blob([bytes.buffer], { type: result.value.attachment.mediaType }))
+        this.createdVoiceUrls.add(url)
+        return url
+      })
+      .catch((error: unknown) => {
+        if (this.voiceUrls.get(key)?.generation === generation) this.voiceUrls.delete(key)
+        throw error
+      })
+    this.voiceUrls.set(key, { sessionId, generation, pending })
+    return pending
+  }
+
+  /**
+   * Release every historical voice URL owned by one rendered session.
+   * @param sessionId - rendered session scope.
+   */
+  releaseSessionVoices(sessionId: SessionId): void {
+    this.voiceGenerations.set(sessionId, (this.voiceGenerations.get(sessionId) ?? 0) + 1)
+    for (const [key, entry] of this.voiceUrls) {
+      if (entry.sessionId !== sessionId) continue
+      this.voiceUrls.delete(key)
+      void entry.pending.then((url) => {
+        if (!this.createdVoiceUrls.delete(url)) return
         revokePreview(url)
       }, () => {
         // A failed or invalidated load owns no object URL.

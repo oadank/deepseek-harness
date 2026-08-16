@@ -7,9 +7,10 @@
  * @module dsh-llm-deepseek/serialize
  */
 
-import { contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
+import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import type { WireMessage, WireRequest, WireTool } from './types.ts'
+import { join } from 'node:path'
 
 /** Adapter-level request defaults (from plugin config). */
 export interface RequestDefaults {
@@ -60,11 +61,57 @@ function flattenText(blocks: ContentBlock[]): string {
     .join('')
 }
 
-/** Reject core image content before any text-flattening path can silently erase it. */
-function assertTextOnly(blocks: readonly ContentBlock[]): void {
-  if (contentHasImage(blocks)) {
-    throw new LlmError('The DeepSeek chat-completions adapter does not support image content.', 'UNSUPPORTED_CONTENT')
+/** [本地改造 2026-08-16] 把 image 块转成含本地附件路径的文本（参考 dsh-vscode-layout 补丁）：
+ * 文本模型收到路径后，通过视觉 MCP（look 工具）识图；tool-result 里嵌套的图片同样处理。 */
+function imageAsText(block: ContentBlock): ContentBlock {
+  const ref = (block as { attachment?: { attachmentId?: unknown; name?: string; mediaType?: string } }).attachment
+  const rawId = typeof ref?.attachmentId === 'string' ? ref.attachmentId : ''
+  const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
+  const name = typeof ref?.name === 'string' && ref.name.length > 0 ? ref.name : 'image'
+  const mediaType = ref?.mediaType ?? 'image/jpeg'
+  const home = process.env.DSH_HOME ?? ''
+  const path = hex.length > 0 && home !== ''
+    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
+    : '(unknown)'
+  return { type: 'text', text: `[用户发送了一张图片，名称 "${name}"，类型 ${mediaType}，本地文件路径: ${path}]` }
+}
+
+function imagesAsText(blocks: readonly ContentBlock[]): ContentBlock[] {
+  return blocks.map((block) => {
+    if (block.type === 'image') return imageAsText(block)
+    if (block.type === 'tool-result') return { ...block, content: imagesAsText(block.content) }
+    return block
+  })
+}
+
+/** [本地改造 2026-08-16] 把 voice 块转成文本：attachment.transcript 存在时直接给出
+ * 识别文本（旧宿主链路兼容）；否则输出本地语音文件路径——agent 收到路径后主动调
+ * 本地 ASR 服务识别（与图片走视觉 MCP 同一模式），识别结果显示在助手侧。 */
+function voiceAsText(block: ContentBlock): ContentBlock {
+  const ref = (block as { attachment?: { voiceId?: unknown; durationMs?: unknown; transcript?: unknown } }).attachment
+  const rawId = typeof ref?.voiceId === 'string' ? ref.voiceId : ''
+  const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
+  const transcript = typeof ref?.transcript === 'string' && ref.transcript.length > 0
+    ? ref.transcript
+    : null
+  const durationMs = typeof ref?.durationMs === 'number' ? ref.durationMs : null
+  const duration = durationMs === null ? '' : `（时长 ${Math.round(durationMs / 1000)} 秒）`
+  if (transcript !== null) {
+    return { type: 'text', text: `[用户发送了一条语音${duration}，识别内容：${transcript}]` }
   }
+  const home = process.env.DSH_HOME ?? ''
+  const path = hex.length > 0 && home !== ''
+    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
+    : '(unknown)'
+  return { type: 'text', text: `[用户发送了一条语音${duration}，本地语音文件路径: ${path}]` }
+}
+
+function voicesAsText(blocks: readonly ContentBlock[]): ContentBlock[] {
+  return blocks.map((block) => {
+    if (block.type === 'voice') return voiceAsText(block)
+    if (block.type === 'tool-result') return { ...block, content: voicesAsText(block.content) }
+    return block
+  })
 }
 
 /** Serialize one assistant message (text + reasoning + tool calls). */
@@ -112,19 +159,22 @@ function serializeAssistant(message: Message): WireMessage {
 export function serializeMessages(messages: Message[]): WireMessage[] {
   const wire: WireMessage[] = []
   for (const message of messages) {
-    assertTextOnly(message.content)
+    // [本地改造 2026-08-16] 图片块先转本地路径文本（imagesAsText），agent 用视觉 MCP 识图；
+    // 语音块同样转本地路径文本（voicesAsText），agent 用本地 ASR 服务识别——识别结果
+    // 以工具输出显示在助手侧（与识图同一模式），host 不再二次注入识别文本。
+    const content = voicesAsText(imagesAsText(message.content))
     if (message.role === 'system') {
-      wire.push({ role: 'system', content: flattenText(message.content) })
+      wire.push({ role: 'system', content: flattenText(content) })
       continue
     }
     if (message.role === 'assistant') {
-      wire.push(serializeAssistant(message))
+      wire.push(serializeAssistant({ ...message, content }))
       continue
     }
     // user role: tool results ride in user messages in the harness
     // vocabulary, but DeepSeek wants them as role:'tool' messages.
-    const toolResults = message.content.filter(block => block.type === 'tool-result')
-    const text = flattenText(message.content)
+    const toolResults = content.filter(block => block.type === 'tool-result')
+    const text = flattenText(content)
     if (text.length > 0 || toolResults.length === 0) {
       wire.push({ role: 'user', content: text })
     }

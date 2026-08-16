@@ -137,7 +137,7 @@ export function ConversationSessionHeader({
  */
 export function ConversationSession({
   sessionId, useSession, useInput, inputActions, useStore, actions,
-  renderSlot, views, bindDraftMirror, releaseSessionImages,
+  renderSlot, views, bindDraftMirror, releaseSessionImages, releaseSessionVoices,
 }: ConversationSessionProps) {
   useSyncExternalStore(views.subscribe, views.version)
   const tabs = views.list()
@@ -160,7 +160,15 @@ export function ConversationSession({
 
   useEffect(() => () => {
     releaseSessionImages(sessionId)
-  }, [releaseSessionImages, sessionId])
+    releaseSessionVoices(sessionId)
+    // [本地修复 2026-08-16] 依赖只保留 sessionId：inject 的
+    // releaseSessionImages/releaseSessionVoices 每次渲染都是新函数引用，
+    // 若列入依赖，每次渲染都会先执行本 cleanup → voice/image generation
+    // 持续递增 → 加载中的 resolveVoice/resolveImage 被
+    // "historical voice scope was released" 拒绝 → 语音回复按钮变灰。
+    // 只在切会话/卸载时释放一次即可，与 effect 语义一致。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
 
   if (blank && composerPhase === 'blank') return null
   return (

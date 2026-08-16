@@ -166,8 +166,8 @@ describe('PermissionPresetService', () => {
 
   it('optionOf() presents shipped labels/descriptions, falls back to the raw key, and fixes custom', async () => {
     const ctx = await mounted()
-    expect(ctx.permissionPresets.optionOf('danger-full-access')).toEqual({ value: 'danger-full-access', name: 'danger-full-access', description: 'Full file access without approval prompts.' })
-    expect(ctx.permissionPresets.optionOf('custom')).toEqual({ value: 'custom', name: 'Custom', description: 'Current sandbox and approval settings do not match a preset.' })
+    expect(ctx.permissionPresets.optionOf('danger-full-access')).toEqual({ value: 'danger-full-access', name: 'danger-full-access', description: '无审批提示的完全文件访问。' })
+    expect(ctx.permissionPresets.optionOf('custom')).toEqual({ value: 'custom', name: '自定义', description: '当前沙箱与审批设置不匹配任何预设。' })
     const bare = await mounted({ config: { presets: { plain: { sandbox: 'workspace-write', approval: 'ask' } } } })
     expect(bare.permissionPresets.optionOf('plain')).toEqual({ value: 'plain', name: 'plain' })
     expect(() => ctx.permissionPresets.optionOf('plan')).toThrow(/unknown preset/)

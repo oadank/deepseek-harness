@@ -286,7 +286,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  /* [本地改造 2026-08-16] 竖屏/窄宽时允许换行：工具按钮与右侧控制不会被挤折叠 */
+  flex-wrap: wrap;
+  gap: 6px 12px;
   /* 2px moved from the bottom pad to the top: the whole control row sits 2px
      lower in the card (it read too high against the textarea) while the card
      height and the controls' own centering stay untouched. */
@@ -318,9 +320,13 @@
   gap: 12px;
 }
 
+/* [本地改造 2026-08-16] trailing 间距收窄（模型/余额/上下文挤在一起，省垂直空间）；
+   窄宽时可换行，避免竖屏折叠。 */
 .trailing {
-  flex: none;
-  gap: 12px;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 /* Attach circle (figma + control): 28px, selector fill, primary glyph. */
@@ -344,6 +350,67 @@
 .add:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* [本地改造 2026-08-16] 语音录音中：麦克风按钮换成红点计时（飞书/微信式状态）。 */
+.voiceRecording {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.voiceRecording:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+}
+
+.voiceTimer {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.voiceDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: dsh-voice-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes dsh-voice-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voiceDot {
+    animation: none;
+  }
+}
+
+/* [本地改造 2026-08-16] 录音手势浮层：按住说话时提示当前松手动作。 */
+.voiceHint {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.voiceHint[data-gesture='cancel'] {
+  color: var(--dsw-alias-state-error-primary);
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+}
+
+.voiceHint[data-gesture='text'] {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover-solid);
 }
 
 /* Plan / Read-only / model — native <select>, chip-like closed chrome
