@@ -12,23 +12,14 @@ import clsx from 'clsx'
 import {
   IconPlusOutline16, IconWarningOutline16, Toast, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-// Type-only: the `plan` projection key merge (the TodoDock posture — the
-// composer reads a host-computed value; the domain owns the key).
-import type {} from '@deepseek-ai/dsh-plan-mode/client'
-// Type-only: the `goal` projection key merge (hint disambiguation).
-import type {} from '@deepseek-ai/dsh-goal/client'
-// The `imageLimits` projection key merge (intake pre-check) arrives with the
-// wire types: apiproxy's sessions contract declares it, and client-runtime's
-// api-remotes import already places it in every client program.
-import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
-import type { PromptContentPart } from '@deepseek-ai/dsh-client-connection/client'
+import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ComposerBarProps } from '../contract/slots.ts'
 import { deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
 import { attachmentErrorText, imageSizeText } from '../image-labels.ts'
 import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
 import { ContextMeter } from './ContextMeter.tsx'
-import { BalanceMeter } from './BalanceMeter.tsx'
+/* [本地改造 2026-08-18] 余额显示已迁移至插件 @anoslide/dsh-client-balance（conversation.input.right）。 */
 import { PermissionSelect } from './PermissionSelect.tsx'
 import { isSafariBrowser, repairSafariTextareaLayout } from './safari.ts'
 import css from './InputBar.module.css'
@@ -40,7 +31,7 @@ export type InputBarProps = ComposerBarProps
 
 export function InputBar({
   useSession, useInput, inputActions, keyboard, addImages, removeImage, draftImages,
-  resolveSubmitMode, toggleCommandMenu, stop, command, readBalance, sendVoice, transcribeVoice, t,
+  resolveSubmitMode, toggleCommandMenu, stop, command, sendVoice, transcribeVoice, t,
   renderSlot, useNotices, useLexicon, useMenuLauncher,
   useProjection, sessionId, variant, disabled: inert = false, blocked,
   workspacePickerOpen = false, onRequestWorkspace,
@@ -212,6 +203,8 @@ export function InputBar({
   }, [finishRecording])
   const startRecording = useCallback(async (): Promise<void> => {
     if (sendVoice === undefined) return
+    // [本地改造 2026-08-18] 录音时先停掉正在播放的语音（避免外放被录进新语音）
+    stopVoicePlayback()
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const recorder = new MediaRecorder(stream)
@@ -343,25 +336,27 @@ export function InputBar({
   const revealSelectionFocus = (el: HTMLTextAreaElement): void => {
     // selectionStart/End are number|null in lib.dom; the type-aware lint program narrows them.
     const caret = el.selectionDirection === 'backward' ? el.selectionStart : el.selectionEnd
-    // oxlint-disable-next-line typescript/no-unnecessary-condition
     revealCaret(caret ?? el.value.length)
   }
 
-  // Unlock (mount / session switch) returns focus to the box, and owns the
-  // reveal that comes with it. `preventScroll` because this focus is ours, not
-  // a gesture: the textarea is as tall as the draft, so the browser's reveal
-  // would walk up to the conversation scrollport and move the transcript under
-  // a user who only switched session. That leaves the caret to us — the DOM is
-  // reused across sessions, so switching to a longer draft keeps the previous
-  // offset while the value swap puts the caret at the new draft's end, which is
-  // off screen (measured on all three engines: offset 0 with the caret 940px
-  // down). Suppress the walk, then reveal in our own box.
+  // [本地改造 2026-08-16] 彻底取消"切会话/挂载自动聚焦"：移动端/触屏切会话
+  // 会弹输入法。聚焦只在"同一会话内解锁边沿"（locked true→false，运行结束
+  // 或从禁用态恢复）触发；sessionId 变化（切会话）或首次挂载都不抢焦点。
+  const lastLockedRef = useRef<boolean>(locked)
+  const lastFocusSessionRef = useRef<SessionId | undefined>(sessionId)
   useEffect(() => {
     const el = inputRef.current
-    if (locked || el === null) return
+    const wasLocked = lastLockedRef.current
+    lastLockedRef.current = locked
+    if (el === null) return
+    if (locked || !wasLocked) return
+    if (lastFocusSessionRef.current !== sessionId) return
     el.focus({ preventScroll: true })
     revealSelectionFocus(el)
   }, [locked, sessionId])
+  useEffect(() => {
+    lastFocusSessionRef.current = sessionId
+  }, [sessionId])
 
   // A persisted draft arrives AFTER the unlock effect: ConversationSession
   // adopts it in its own mount effect, and a parent's mount effect runs after
@@ -412,12 +407,10 @@ export function InputBar({
   }, [])
 
   // selectionStart/End are number|null in lib.dom; the type-aware lint program narrows them.
-  /* oxlint-disable typescript/no-unnecessary-condition */
   const selectionOf = (el: HTMLTextAreaElement) => ({
     start: el.selectionStart ?? 0,
     end: el.selectionEnd ?? el.selectionStart ?? 0,
   })
-  /* oxlint-enable typescript/no-unnecessary-condition */
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (workspaceTrigger) {
@@ -434,7 +427,6 @@ export function InputBar({
     // IME guard so a composition-closing Shift+Enter still breaks the line.
     if (e.key === 'Enter' && e.shiftKey) return
     // keyCode 229 is the legacy IME-composition signal engines emit without isComposing.
-    // oxlint-disable-next-line typescript/no-deprecated
     const composing = composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229
     if (!composing && !machineBusy && !locked
       && (e.key === 'Backspace' || e.key === 'Delete')) {
@@ -516,7 +508,6 @@ export function InputBar({
     safariNativeShrinkRef.current = safari && next.length < draft.length
     keyboard.setDraft(next)
     // selectionStart is number|null in lib.dom; the type-aware lint program narrows it.
-    // oxlint-disable-next-line typescript/no-unnecessary-condition
     keyboard.track(next, e.target.selectionStart ?? next.length)
   }
 
@@ -850,7 +841,7 @@ export function InputBar({
         </div>
         <div className={css.row}>
           <div className={css.tools}>
-            {/* [本地改造 2026-08-16] 附件上传按钮：选图 → 图片附件 → 发送后 host 无视觉自动转 vision-qa */}
+            {/* [本地改造 2026-08-16] 附件上传按钮（恢复 2026-08-18）：选图 → 图片进入输入框内附件条（与 Ctrl+V 粘贴同链路 intakeImages），随文字一起发送；手机端无粘贴键，按钮必须有。 */}
             <button
               type="button"
               className={css.add}
@@ -929,7 +920,6 @@ export function InputBar({
           <div className={css.trailing}>
             {rightItems}
             {renderSlot('conversation.input.model', { locked: modelSeatLocked })}
-            <BalanceMeter readBalance={readBalance} running={running} />
             <ContextMeter useProjection={useProjection} t={t} />
             {interruptible && (
               <Tooltip label={t('input.stop')} side="top" delayMs={500}>

@@ -988,41 +988,14 @@ describe('running and lock semantics', () => {
     expect(scroll.scrollTop).toBe(48 + 112) // from 48, by (524 + 24) - 436
   })
 
-  it('a session switch refocuses without moving the transcript, and reveals the new draft caret', () => {
-    // The composer DOM is reused across sessions, so the previous session's
-    // offset survives while the value swap puts the caret at the new draft's
-    // end. `preventScroll` keeps the browser from revealing it through the
-    // conversation scrollport, which leaves the reveal to the effect itself.
+  it('a session switch does not refocus the composer (local patch: no IME popup on switch)', () => {
+    // 本地改造 2026-08-16：切换会话不再自动聚焦输入框（移动端/触屏会弹输入法）。
+    // 聚焦只跟随 locked（挂载/解锁），sessionId 变化不抢焦点。
     const { view, textarea, props } = bench({ draft: 'line\n'.repeat(40) })
-    const scroll = view.container.querySelector<HTMLElement>('[data-input-scroll]')!
-    const mirror = view.container.querySelector<HTMLElement>('[data-input-mirror]')!
-    onTestFinished(() => { Range.prototype.getBoundingClientRect = ZERO_RECT })
-    scroll.getBoundingClientRect = () => ({ top: 100, bottom: 436 }) as DOMRect
-    Object.defineProperty(scroll, 'clientHeight', { value: 336, configurable: true })
-    Object.defineProperty(scroll, 'scrollHeight', { value: 964, configurable: true })
-    Object.defineProperty(scroll, 'scrollTop', { value: 0, writable: true, configurable: true })
-    Range.prototype.getBoundingClientRect = () => ({ top: 500, bottom: 524 }) as DOMRect
-    // The draft ends in a newline, so the reveal takes the after-newline path
-    // and needs a resolvable line-height (jsdom computes `normal`).
-    mirror.style.lineHeight = '24px'
-    // Which index the effect reveals at, not merely that it scrolled: a
-    // revealCaret(0) would land the same offset without this.
-    onTestFinished(() => { Range.prototype.setStart = NATIVE_SET_START })
-    let measured: { node: Node; offset: number } | null = null
-    Range.prototype.setStart = function setStart(node: Node, offset: number): void {
-      measured = { node, offset }
-      NATIVE_SET_START.call(this, node, offset)
-    }
     const focused: (boolean | undefined)[] = []
     textarea.focus = (options?: FocusOptions) => { focused.push(options?.preventScroll) }
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length)
     act(() => { view.rerender(<InputBar {...props} sessionId={'s2' as SessionId} />) })
-    expect(focused).toEqual([true])
-    expect(scroll.scrollTop).toBe(112) // (524 + 24) - 436
-    // The draft ends in a newline, so the rule measures that newline: the
-    // caret's own index is the mirror text's length minus its sentinel.
-    expect(measured!.node).toBe(mirror.firstChild)
-    expect(measured!.offset).toBe(textarea.value.length - 1)
+    expect(focused).toEqual([])
   })
 
   it('a persisted draft adopted after mount gets its caret revealed too', () => {

@@ -305,19 +305,18 @@ export class PiAiAdapter extends LlmAdapter {
 
     try {
       const containsImage = options.messages.some(message => contentHasImage(message.content))
-      if (containsImage && !model.input.includes('image')) {
-        throw new LlmError(`pi-ai model "${model.id}" does not support image input`, 'UNSUPPORTED_CONTENT')
-      }
-      const attachments = containsImage ? this.config.resolveAttachments?.() : undefined
-      if (containsImage && attachments === undefined) {
+      // [本地改造 2026-08-16] 图片/语音与模型原生能力解耦：非视觉模型
+      // （model.input 不含 image）不再拒绝——context.ts 会把图片块转成本地
+      // 路径文本，agent 用视觉 MCP（look）识图；视觉模型保持原逻辑（读原图
+      // 送 pi-ai，需要 durable attachment 服务）。
+      const vision = model.input.includes('image')
+      const attachments = containsImage && vision ? this.config.resolveAttachments?.() : undefined
+      if (containsImage && vision && attachments === undefined) {
         throw new LlmError('pi-ai image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
       }
-      const onReplayDegrade = (reason: string): void => {
-        this.config.onReplayDegrade?.({ provider: options.provider, model: options.model, reason })
-      }
       const context = attachments === undefined
-        ? toPiContext(options, undefined, onReplayDegrade)
-        : await toPiContext(options, attachments, onReplayDegrade, profile.maxRequestImageBytes)
+        ? await toPiContext(options, undefined, vision)
+        : await toPiContext(options, attachments, vision)
       const events = snapshot.models.streamSimple(model, context, {
         ...profileOptions(profile, reasoning, apiKey),
         ...options.temperature === undefined ? {} : { temperature: options.temperature },

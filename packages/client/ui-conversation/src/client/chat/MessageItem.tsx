@@ -20,6 +20,29 @@ import css from './MessageItem.module.css'
 type UserImage = Extract<UserMessageNode['content'][number], { type: 'image' }>
 type UserVoice = Extract<UserMessageNode['content'][number], { type: 'voice' }>
 
+// [本地改造 2026-08-18] 微信式语音互斥：同一时刻只播一条语音。点新的自动停旧的，
+// 避免多个 <audio> 同时发声混在一起。模块级单例，跨卡片共享。
+let activeVoice: { id: string; audio: HTMLAudioElement; setPlaying: (playing: boolean) => void } | null = null
+
+function playExclusive(id: string, audio: HTMLAudioElement, setPlaying: (playing: boolean) => void): void {
+  if (activeVoice !== null && activeVoice.id !== id) {
+    activeVoice.audio.pause()
+    activeVoice.setPlaying(false)
+  }
+  activeVoice = { id, audio, setPlaying }
+  setPlaying(true)
+}
+
+// [本地改造 2026-08-18] 录音互斥：InputBar 开始录音时调用，停掉正在播放的语音，
+// 避免外放声音被麦克风录进新语音（回声）。
+export function stopVoicePlayback(): void {
+  if (activeVoice !== null) {
+    activeVoice.audio.pause()
+    activeVoice.setPlaying(false)
+    activeVoice = null
+  }
+}
+
 function contentParts(content: readonly unknown[]): {
   text: string
   images: { attachment: UserImage['attachment'] }[]
@@ -254,8 +277,13 @@ export function VoiceCard({ attachment, load, t }: {
   const toggle = (): void => {
     const audio = audioRef.current
     if (audio === null) return
-    if (playing) audio.pause()
-    else void audio.play().catch(() => { setFailed(true) })
+    if (playing) {
+      audio.pause()
+      if (activeVoice?.id === attachment.voiceId) activeVoice = null
+    } else {
+      playExclusive(attachment.voiceId, audio, setPlaying)
+      void audio.play().catch(() => { setFailed(true) })
+    }
   }
   const seconds = attachment.durationMs !== undefined
     ? Math.max(1, Math.ceil(attachment.durationMs / 1_000))

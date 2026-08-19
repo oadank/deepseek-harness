@@ -185,6 +185,11 @@ export async function synthesizeReplyVoice(text: string, provider?: string): Pro
   try {
     if (engine === 'xiaomi') return await synthesizeXiaomiVoice(speak)
     if (engine === 'local') return await synthesizeLocalVoice(speak)
+    // [本地改造 2026-08-17] 默认（auto）优先小米 MiMo（用户配置），key 缺失/合成失败时降级微软 edge
+    if (engine === 'auto') {
+      const xiaomi = await synthesizeXiaomiVoice(speak)
+      if (xiaomi !== null) return xiaomi
+    }
     return await synthesizeEdgeVoice(speak)
   } catch {
     return null

@@ -4,20 +4,28 @@
  * @module dsh-llm-pi-ai/context
  */
 
-import { CallId, contentHasImage, LlmError, offloadRequestImages } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
+import { CallId, contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { Context as PiContext, ImageContent, Message as PiMessage, TextContent, Tool as PiTool } from '@earendil-works/pi-ai'
 import { toPiAssistant } from './replay.ts'
 import { join } from 'node:path'
 
-/** Join the text blocks of a harness message. */
-function flattenText(message: Message): string {
-  return message.content
-    .map(voiceAsText)
-    .filter(block => block.type === 'text')
-    .map(block => block.text)
-    .join('')
+/** [本地改造 2026-08-16] 把已转为文本的内容块扁平化为纯文本（非视觉模型路径）。 */
+function flattenBlocks(blocks: readonly ContentBlock[]): string {
+  let out = ''
+  for (const block of blocks) {
+    if (block.type === 'text') {
+      out += block.text
+    } else if (block.type === 'voice') {
+      const asText = voiceAsText(block)
+      if (asText.type === 'text') out += asText.text
+    } else if (block.type === 'tool-result') {
+      out += flattenBlocks(block.content)
+    }
+    // image 已在 imagesToText 转成 text，此处不再出现。
+  }
+  return out
 }
 
 /**
@@ -45,31 +53,55 @@ function voiceAsText(block: ContentBlock): ContentBlock {
   return { type: 'text', text: `[用户发送了一条语音${duration}，本地语音文件路径: ${path}]` }
 }
 
-/** Flatten text recursively inside one tool result. */
-function toolResultText(blocks: readonly ContentBlock[]): string {
-  return blocks.map(block => block.type === 'text'
-    ? block.text
-    : block.type === 'tool-result' ? toolResultText(block.content) : '').join('')
+/**
+ * [本地改造 2026-08-16] 把 image 块转成含本地附件路径的文本（与 llm-deepseek
+ * serialize.ts 的 imageAsText 同一策略）：非视觉模型（pi-ai input 不含 image）
+ * 收到路径文本后，必须通过视觉 MCP（mcp__visionqa__look / mcp__zai-vision__analyze_image）
+ * 识图；该文件无扩展名，read_image 等按扩展名校验的工具会拒绝，禁止使用。
+ */
+function imageAsText(block: ContentBlock): ContentBlock {
+  if (block.type !== 'image') return block
+  const ref = (block as { attachment?: { attachmentId?: unknown; name?: unknown; mediaType?: unknown } }).attachment
+  const rawId = typeof ref?.attachmentId === 'string' ? ref.attachmentId : ''
+  const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
+  const name = typeof ref?.name === 'string' && ref.name.length > 0 ? ref.name : 'image'
+  const mediaType = typeof ref?.mediaType === 'string' ? ref.mediaType : 'image/jpeg'
+  const home = process.env.DSH_HOME ?? ''
+  const path = hex.length > 0 && home !== ''
+    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
+    : '(unknown)'
+  return { type: 'text', text: `[用户发送了一张图片，名称 "${name}"，类型 ${mediaType}。请用视觉 MCP 工具识图（mcp__visionqa__look 或 mcp__zai-vision__analyze_image，传入 image_path），不要用 read_image（该文件无扩展名，read_image 会拒绝）：${path}]` }
 }
 
-/** Reject image roles that pi-ai cannot replay before request-size offloading can replace them. */
-function assertSupportedImageRoles(messages: readonly Message[]): void {
-  for (const message of messages) {
-    if (message.role !== 'user' && contentHasImage(message.content)) {
-      throw new LlmError(
-        `pi-ai cannot represent an image in an in-history ${message.role} message`,
-        'UNSUPPORTED_CONTENT',
-      )
+/** Convert image blocks to path-text when the route model is not a vision model. */
+function imagesToText(blocks: readonly ContentBlock[], vision: boolean): readonly ContentBlock[] {
+  if (vision) return blocks
+  const out: ContentBlock[] = []
+  for (const block of blocks) {
+    if (block.type === 'image') {
+      out.push(imageAsText(block))
+    } else if (block.type === 'tool-result') {
+      out.push({ ...block, content: [...imagesToText(block.content, vision)] })
+    } else {
+      out.push(block)
     }
   }
+  return out
 }
 
 async function userContent(
   blocks: readonly ContentBlock[],
-  attachments: AttachmentStore,
+  attachments: AttachmentStore | undefined,
+  vision: boolean,
 ): Promise<string | (TextContent | ImageContent)[]> {
+  // [本地改造 2026-08-16] 非视觉模型：图片块先整体转路径文本（agent 用视觉 MCP 看图），
+  // 不再需要 attachments；视觉模型保持原逻辑（读原图送 pi-ai）。
+  const converted = imagesToText(blocks, vision)
+  if (!vision) {
+    return flattenBlocks(converted)
+  }
   const content: (TextContent | ImageContent)[] = []
-  for (const block of blocks) {
+  for (const block of converted) {
     switch (block.type) {
       case 'text':
         if (block.text.length > 0) content.push({ type: 'text', text: block.text })
@@ -83,6 +115,9 @@ async function userContent(
         break
       }
       case 'image': {
+        if (attachments === undefined) {
+          throw new LlmError('pi-ai image conversion requires the durable attachment service', 'UNSUPPORTED_CONTENT')
+        }
         const stored = await attachments.readImage(block.attachment)
         content.push({
           type: 'image',
@@ -93,7 +128,7 @@ async function userContent(
       }
       case 'tool-result':
         {
-          const nested = await userContent(block.content, attachments)
+          const nested = await userContent(block.content, attachments, vision)
           if (typeof nested === 'string') {
             if (nested.length > 0) content.push({ type: 'text', text: nested })
           } else {
@@ -130,15 +165,17 @@ function piContext(options: GenerateOptions, messages: PiMessage[]): PiContext {
   }
 }
 
-function textOnlyContext(options: GenerateOptions, onReplayDegrade?: (reason: string) => void): PiContext {
+function textOnlyContext(options: GenerateOptions, vision: boolean): PiContext {
   const toolNames = new Map<CallId, string>()
   const messages: PiMessage[] = []
   for (const message of options.messages) {
-    if (contentHasImage(message.content)) {
-      throw new LlmError('pi-ai image conversion requires the durable attachment service', 'UNSUPPORTED_CONTENT')
-    }
     if (message.role === 'system') {
-      messages.push({ role: 'user', content: flattenText(message), timestamp: 0 })
+      // 视觉模型无法在 pi-ai 单一 systemPrompt 槽内表达图片；非视觉模型
+      // （vision=false）走文本路径（imagesToText 转路径文本）。
+      if (vision && contentHasImage(message.content)) {
+        throw new LlmError('pi-ai cannot represent an image in an in-history system message', 'UNSUPPORTED_CONTENT')
+      }
+      messages.push({ role: 'user', content: flattenBlocks(imagesToText(message.content, vision)), timestamp: 0 })
       continue
     }
     if (message.role === 'assistant') {
@@ -147,17 +184,26 @@ function textOnlyContext(options: GenerateOptions, onReplayDegrade?: (reason: st
       messages.push(assistant)
       continue
     }
-    const text = flattenText(message)
+    const regular = message.content.filter(block => block.type !== 'tool-result')
+    // [本地改造 2026-08-16] 非视觉模型（vision=false）：图片块转路径文本后扁平化；
+    // 视觉模型（vision=true）无 durable attachment 服务时仍拒绝（必须读原图）。
+    if (vision && contentHasImage(regular)) {
+      throw new LlmError('pi-ai image conversion requires the durable attachment service', 'UNSUPPORTED_CONTENT')
+    }
+    const text = flattenBlocks(imagesToText(regular, vision))
     const results = message.content.filter(block => block.type === 'tool-result')
     if (text.length > 0 || results.length === 0) messages.push({ role: 'user', content: text, timestamp: 0 })
     for (const result of results) {
+      if (vision && contentHasImage(result.content)) {
+        throw new LlmError('pi-ai image conversion requires the durable attachment service', 'UNSUPPORTED_CONTENT')
+      }
       messages.push({
         role: 'toolResult',
         toolCallId: result.toolCallId,
         toolName: toolNames.get(result.toolCallId) ?? 'unknown',
         content: [{
           type: 'text',
-          text: toolResultText(result.content) || '(no output)',
+          text: flattenBlocks(imagesToText(result.content, vision)) || '(no output)',
         }],
         isError: result.isError ?? false,
         timestamp: 0,
@@ -182,54 +228,39 @@ export function toPiContext(
 ): PiContext
 /**
  * Convert harness history to a pi-ai Context while resolving durable images.
- * Tool result names are recovered from preceding assistant tool calls. When
- * the accumulated base64 image payload exceeds `maxRequestImageBytes`, the
- * oldest images are replaced by text placeholders until the request fits, so
- * an image-heavy session keeps clearing gateway request-size caps.
+ * Tool result names are recovered from preceding assistant tool calls.
+ * [本地改造 2026-08-16] vision=false（模型 input 不含 image）时，图片块转为
+ * 本地路径文本（agent 用视觉 MCP 识图），与 llm-deepseek serialize.ts 一致；
+ * attachments 可为 undefined（非视觉路径不需要 durable attachment 服务）。
  * @param options - the harness request; `options.system` maps to pi-ai's single `systemPrompt` slot.
- * @param attachments - durable byte resolver for image references.
- * @param onReplayDegrade - forwarded to {@link toPiAssistant} for each assistant message.
- * @param maxRequestImageBytes - request-level bound on base64-encoded image payload; omission leaves every image in place.
+ * @param attachments - durable byte resolver for image references (vision models); optional.
+ * @param vision - whether the route model accepts image input.
  * @returns the asynchronously resolved pi-ai context.
  */
-export function toPiContext(
-  options: GenerateOptions,
-  attachments: AttachmentStore,
-  onReplayDegrade?: (reason: string) => void,
-  maxRequestImageBytes?: number,
-): Promise<PiContext>
-export function toPiContext(
-  options: GenerateOptions,
-  attachments?: AttachmentStore,
-  onReplayDegrade?: (reason: string) => void,
-  maxRequestImageBytes?: number,
-): PiContext | Promise<PiContext> {
-  return attachments === undefined
-    ? textOnlyContext(options, onReplayDegrade)
-    : toPiContextWithImages(options, attachments, onReplayDegrade, maxRequestImageBytes)
+export function toPiContext(options: GenerateOptions, attachments: AttachmentStore | undefined, vision: boolean): Promise<PiContext>
+export function toPiContext(options: GenerateOptions, attachments?: AttachmentStore, vision = true): PiContext | Promise<PiContext> {
+  return attachments === undefined ? textOnlyContext(options, vision) : toPiContextWithImages(options, attachments, vision)
 }
 
-async function toPiContextWithImages(
-  options: GenerateOptions,
-  attachments: AttachmentStore,
-  onReplayDegrade?: (reason: string) => void,
-  maxRequestImageBytes?: number,
-): Promise<PiContext> {
-  assertSupportedImageRoles(options.messages)
-  const requestMessages = offloadRequestImages(options.messages, maxRequestImageBytes)
+async function toPiContextWithImages(options: GenerateOptions, attachments: AttachmentStore, vision: boolean): Promise<PiContext> {
   const toolNames = new Map<CallId, string>()
   const messages: PiMessage[] = []
 
-  for (const message of requestMessages) {
+  for (const message of options.messages) {
     if (message.role === 'system') {
+      // 视觉模型无法在 pi-ai 单一 systemPrompt 槽内表达图片；非视觉模型
+      // （vision=false）走文本路径（imagesToText 转路径文本）。
+      if (vision && contentHasImage(message.content)) {
+        throw new LlmError('pi-ai cannot represent an image in an in-history system message', 'UNSUPPORTED_CONTENT')
+      }
       // pi-ai has a single systemPrompt slot; in-history system messages are
       // folded into user messages to preserve order (rare in practice — the
       // harness sends the system prompt via options.system).
-      messages.push({ role: 'user', content: flattenText(message), timestamp: 0 })
+      messages.push({ role: 'user', content: flattenBlocks(imagesToText(message.content, vision)), timestamp: 0 })
       continue
     }
     if (message.role === 'assistant') {
-      const assistant = toPiAssistant(message, onReplayDegrade)
+      const assistant = toPiAssistant(message)
       for (const block of assistant.content) {
         if (block.type === 'toolCall') toolNames.set(CallId(block.id), block.name)
       }
@@ -238,15 +269,13 @@ async function toPiContextWithImages(
     }
     // user role: text + tool results (each result becomes its own message).
     const regular = message.content.filter(block => block.type !== 'tool-result')
-    const content = await userContent(regular, attachments)
-    const results = message.content.filter((block): block is Extract<ContentBlock, { type: 'tool-result' }> => (
-      block.type === 'tool-result'
-    ))
+    const content = await userContent(regular, attachments, vision)
+    const results = message.content.filter(block => block.type === 'tool-result')
     if (content.length > 0 || results.length === 0) {
       messages.push({ role: 'user', content, timestamp: 0 })
     }
     for (const result of results) {
-      const resultContent = await userContent(result.content, attachments)
+      const resultContent = await userContent(result.content, attachments, vision)
       messages.push({
         role: 'toolResult',
         toolCallId: result.toolCallId,

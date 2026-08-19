@@ -84,7 +84,7 @@ describe('toPiContext', () => {
         content: [{ type: 'text', text: 'describe' }, { type: 'image', attachment }],
         source: { kind: 'plugin', plugin: 'test' },
       })],
-    }, { readImage } as unknown as AttachmentStore)
+    }, { readImage } as unknown as AttachmentStore, true)
 
     expect(readImage).toHaveBeenCalledWith(attachment)
     expect(context.messages[0]).toEqual({
@@ -129,7 +129,7 @@ describe('toPiContext', () => {
         }],
         source: { kind: 'plugin', plugin: 'test' },
       })],
-    }, { readImage } as unknown as AttachmentStore)
+    }, { readImage } as unknown as AttachmentStore, true)
 
     expect(context.messages).toEqual([{
       role: 'toolResult',

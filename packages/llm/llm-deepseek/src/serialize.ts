@@ -81,7 +81,8 @@ function flattenText(blocks: ContentBlock[]): string {
 }
 
 /** [本地改造 2026-08-16] 把 image 块转成含本地附件路径的文本（参考 dsh-vscode-layout 补丁）：
- * 文本模型收到路径后，通过视觉 MCP（look 工具）识图；tool-result 里嵌套的图片同样处理。 */
+ * 文本模型收到路径后，必须通过视觉 MCP（mcp__visionqa__look / mcp__zai-vision__analyze_image）
+ * 识图；该文件无扩展名，read_image 等按扩展名校验的工具会拒绝，禁止使用。 */
 function imageAsText(block: ContentBlock): ContentBlock {
   const ref = (block as { attachment?: { attachmentId?: unknown; name?: string; mediaType?: string } }).attachment
   const rawId = typeof ref?.attachmentId === 'string' ? ref.attachmentId : ''
@@ -92,7 +93,7 @@ function imageAsText(block: ContentBlock): ContentBlock {
   const path = hex.length > 0 && home !== ''
     ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
     : '(unknown)'
-  return { type: 'text', text: `[用户发送了一张图片，名称 "${name}"，类型 ${mediaType}，本地文件路径: ${path}]` }
+  return { type: 'text', text: `[用户发送了一张图片，名称 "${name}"，类型 ${mediaType}。请用视觉 MCP 工具识图（mcp__visionqa__look 或 mcp__zai-vision__analyze_image，传入 image_path），不要用 read_image（该文件无扩展名，read_image 会拒绝）：${path}]` }
 }
 
 function imagesAsText(blocks: readonly ContentBlock[]): ContentBlock[] {

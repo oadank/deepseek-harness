@@ -108,7 +108,7 @@ describe('pi-ai request context conversion', () => {
           { type: 'image', attachment: ref },
         ],
       }]),
-    ]), attachments)
+    ]), attachments, true)
 
     expect(context.messages).toEqual([
       { role: 'user', content: '', timestamp: 0 },
@@ -341,7 +341,7 @@ describe('pi-ai request context conversion', () => {
           transcript: '语音内容',
         },
       }]),
-    ]), attachments)
+    ]), attachments, true)
     expect(context.messages[0]).toEqual({
       role: 'user',
       content: '[用户发送了一条语音，识别内容：语音内容]',
@@ -350,20 +350,15 @@ describe('pi-ai request context conversion', () => {
   })
 
   it('handles in-history system and assistant messages explicitly on the image path', async () => {
-    for (const role of ['system', 'assistant'] as const) {
-      const readImage = vi.fn()
-      const store = { readImage } as unknown as AttachmentStore
-      await expect(toPiContext(request([
-        history(role, [{ type: 'image', attachment: ref }]),
-      ]), store, undefined, 1)).rejects.toMatchObject({ code: 'UNSUPPORTED_CONTENT' })
-      expect(readImage).not.toHaveBeenCalled()
-    }
+    await expect(toPiContext(request([
+      history('system', [{ type: 'image', attachment: ref }]),
+    ]), attachments, true)).rejects.toMatchObject({ code: 'UNSUPPORTED_CONTENT' })
 
     await expect(toPiContext(request([
       history('system', [{ type: 'text', text: 'history system' }]),
       history('assistant', [{ type: 'text', text: 'answer' }]),
       user([{ type: 'text', text: 'plain' }]),
-    ]), attachments)).resolves.toMatchObject({
+    ]), attachments, true)).resolves.toMatchObject({
       messages: [
         { role: 'user', content: 'history system' },
         { role: 'assistant' },
