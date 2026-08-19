@@ -179,7 +179,7 @@ function textOnlyContext(options: GenerateOptions, vision: boolean): PiContext {
       continue
     }
     if (message.role === 'assistant') {
-      const assistant = toPiAssistant(message, onReplayDegrade)
+      const assistant = toPiAssistant(message)
       for (const block of assistant.content) if (block.type === 'toolCall') toolNames.set(CallId(block.id), block.name)
       messages.push(assistant)
       continue
@@ -214,19 +214,6 @@ function textOnlyContext(options: GenerateOptions, vision: boolean): PiContext {
 }
 
 /**
- * Convert text-only harness history to a synchronous pi-ai Context. Tool
- * result names are recovered from preceding assistant tool calls.
- * @param options - the harness request; `options.system` maps to pi-ai's single `systemPrompt` slot.
- * @param attachments - absent; selects the synchronous conversion.
- * @param onReplayDegrade - forwarded to {@link toPiAssistant} for each assistant message.
- * @returns the pi-ai context; `tools` is omitted when the request declares none.
- */
-export function toPiContext(
-  options: GenerateOptions,
-  attachments?: undefined,
-  onReplayDegrade?: (reason: string) => void,
-): PiContext
-/**
  * Convert harness history to a pi-ai Context while resolving durable images.
  * Tool result names are recovered from preceding assistant tool calls.
  * [本地改造 2026-08-16] vision=false（模型 input 不含 image）时，图片块转为
@@ -237,7 +224,8 @@ export function toPiContext(
  * @param vision - whether the route model accepts image input.
  * @returns the asynchronously resolved pi-ai context.
  */
-export function toPiContext(options: GenerateOptions, attachments: AttachmentStore | undefined, vision: boolean): Promise<PiContext>
+export function toPiContext(options: GenerateOptions, attachments?: undefined, vision?: boolean): PiContext
+export function toPiContext(options: GenerateOptions, attachments: AttachmentStore, vision?: boolean): Promise<PiContext>
 export function toPiContext(options: GenerateOptions, attachments?: AttachmentStore, vision = true): PiContext | Promise<PiContext> {
   return attachments === undefined ? textOnlyContext(options, vision) : toPiContextWithImages(options, attachments, vision)
 }

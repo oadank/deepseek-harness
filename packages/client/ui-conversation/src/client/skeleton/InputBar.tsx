@@ -13,12 +13,17 @@ import {
   IconPlusOutline16, IconWarningOutline16, Toast, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { PromptContentPart } from '@deepseek-ai/dsh-client-connection/client'
+import type { Translate } from '@deepseek-ai/dsh-client-locale/client'
+// Type-only: pulls the `plan` SessionProjectionMap merge so useProjection('plan') type-checks.
+import type {} from '@deepseek-ai/dsh-plan-mode/client'
 import type { ComposerBarProps } from '../contract/slots.ts'
 import { deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
 import { attachmentErrorText, imageSizeText } from '../image-labels.ts'
 import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
 import { ContextMeter } from './ContextMeter.tsx'
+import { stopVoicePlayback } from '../chat/MessageItem'
 /* [本地改造 2026-08-18] 余额显示已迁移至插件 @anoslide/dsh-client-balance（conversation.input.right）。 */
 import { PermissionSelect } from './PermissionSelect.tsx'
 import { isSafariBrowser, repairSafariTextareaLayout } from './safari.ts'

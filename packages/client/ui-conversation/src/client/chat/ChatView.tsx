@@ -458,7 +458,6 @@ export function ChatView({
               key={item.id}
               content={item.content}
               renderMessageImages={renderMessageImages}
-              loadImage={loadImage}
               loadVoice={loadVoice}
               t={t}
             />

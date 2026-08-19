@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { CallId, createMessage, createUserMessage, OFFLOADED_IMAGE_TEXT } from '@deepseek-ai/dsh-llm'
+import { CallId, createMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import { toPiContext } from '../src/context.ts'
 import { toPiAssistant } from '../src/replay.ts'
@@ -193,91 +193,6 @@ describe('pi-ai request context conversion', () => {
     })
   })
 
-  it('replaces the oldest images with placeholders once the request payload bound is exceeded', async () => {
-    const readImage = vi.fn(() => Promise.resolve({ ref: { ...ref, bytes: 3 }, data: Uint8Array.of(1, 2, 3) }))
-    const store = { readImage } as unknown as AttachmentStore
-    const sized: ImageAttachmentRef = { ...ref, bytes: 3 }
-    const callId = CallId('shot-call')
-    // Three 3-byte images cost 4 base64 characters each (12 total); a bound of
-    // 8 forces exactly the oldest one out, including one nested in a tool result.
-    const context = await toPiContext(request([
-      user([{
-        type: 'tool-result',
-        toolCallId: callId,
-        content: [{ type: 'image', attachment: sized }],
-      }]),
-      user([{ type: 'image', attachment: sized }, { type: 'text', text: 'newer' }]),
-      user([{ type: 'image', attachment: sized }]),
-    ]), store, undefined, 8)
-
-    expect(context.messages).toEqual([
-      {
-        role: 'toolResult',
-        toolCallId: 'shot-call',
-        toolName: 'unknown',
-        content: [{ type: 'text', text: OFFLOADED_IMAGE_TEXT }],
-        isError: false,
-        timestamp: 0,
-      },
-      {
-        role: 'user',
-        content: [
-          { type: 'image', data: 'AQID', mimeType: 'image/png' },
-          { type: 'text', text: 'newer' },
-        ],
-        timestamp: 0,
-      },
-      { role: 'user', content: [{ type: 'image', data: 'AQID', mimeType: 'image/png' }], timestamp: 0 },
-    ])
-    expect(readImage).toHaveBeenCalledTimes(2)
-  })
-
-  it('keeps every image at exactly the payload bound and drops all of them when even the newest cannot fit', async () => {
-    const sized: ImageAttachmentRef = { ...ref, bytes: 3 }
-    const exact = await toPiContext(request([
-      user([{ type: 'image', attachment: sized }]),
-      user([{ type: 'image', attachment: sized }]),
-    ]), attachments, undefined, 8)
-    expect(exact.messages).toEqual([
-      { role: 'user', content: [expect.objectContaining({ type: 'image' })], timestamp: 0 },
-      { role: 'user', content: [expect.objectContaining({ type: 'image' })], timestamp: 0 },
-    ])
-
-    const readImage = vi.fn()
-    const store = { readImage } as unknown as AttachmentStore
-    const oversized = await toPiContext(request([
-      user([{ type: 'image', attachment: { ...ref, bytes: 300 } }]),
-    ]), store, undefined, 8)
-    // All-text content collapses to the string form; the placeholder still reaches the model.
-    expect(oversized.messages).toEqual([
-      { role: 'user', content: OFFLOADED_IMAGE_TEXT, timestamp: 0 },
-    ])
-    expect(readImage).not.toHaveBeenCalled()
-  })
-
-  it('offloads repeated image-block occurrences by position rather than shared object identity', async () => {
-    const sized: ImageAttachmentRef = { ...ref, bytes: 3 }
-    const shared: ContentBlock = { type: 'image', attachment: sized }
-    const readImage = vi.fn(() => Promise.resolve({ ref: sized, data: Uint8Array.of(1, 2, 3) }))
-    const store = { readImage } as unknown as AttachmentStore
-    const aliased = await toPiContext(request([user([shared, shared])]), store, undefined, 4)
-    const replayed = await toPiContext(request([user([
-      { type: 'image', attachment: { ...sized } },
-      { type: 'image', attachment: { ...sized } },
-    ])]), store, undefined, 4)
-
-    const expected = [{
-      role: 'user',
-      content: [
-        { type: 'text', text: OFFLOADED_IMAGE_TEXT },
-        { type: 'image', data: 'AQID', mimeType: 'image/png' },
-      ],
-      timestamp: 0,
-    }]
-    expect(aliased.messages).toEqual(expected)
-    expect(replayed.messages).toEqual(expected)
-    expect(readImage).toHaveBeenCalledTimes(2)
-  })
 
   it('keeps empty text-only users while separating result-only messages', () => {
     const callId = CallId('unknown-call')

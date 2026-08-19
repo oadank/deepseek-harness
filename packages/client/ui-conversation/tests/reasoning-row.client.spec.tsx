@@ -127,6 +127,7 @@ describe('ReasoningRow', () => {
         t={t}
         blocks={[{ kind: 'reasoning', text: 'Inspect the session\nCheck persistence' }]}
         streaming
+        renderMessageImages={renderMessageImages}
       />,
     )
     fireEvent.click(view.getByText('Think'))
@@ -142,6 +143,7 @@ describe('ReasoningRow', () => {
         t={t}
         blocks={[{ kind: 'reasoning', text: 'Inspect the session\nCheck persistence\nNewest reasoning tokens' }]}
         streaming
+        renderMessageImages={renderMessageImages}
       />,
     )
     expect(body.scrollTop).toBe(900)
@@ -151,6 +153,7 @@ describe('ReasoningRow', () => {
         t={t}
         blocks={[{ kind: 'reasoning', text: 'Inspect the session\nCheck persistence\nNewest reasoning tokens' }]}
         streaming={false}
+        renderMessageImages={renderMessageImages}
       />,
     )
     // Stream end leaves the reader's scroll position untouched.

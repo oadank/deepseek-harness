@@ -34,7 +34,7 @@ import { deriveEventMessage, foldSurface } from '@deepseek-ai/dsh-session/surfac
 import type {
   ApiProxy, ClientRequest, ClientResponse, HistoryEntry, HostFrame, MuxFrame, RpcReceipt,
   ModelProviderGroup, ModelSelection, RpcRequest, RpcResponse, RpcResult, ServerRequest, ServerResponse, SessionSummary,
-  ToolCallView, ToolEventView, ToolResultView, WorkspaceId, WorkspaceView,
+  ToolCallView, ToolEventView, ToolResultView, VoiceAttachmentRef, WorkspaceId, WorkspaceView,
 } from './api.ts'
 import type { RequestPayload, ResponseValue, RpcMethodMap } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { AbstractApiClient, RpcId, SESSION_SEARCH_RESULT_LIMIT } from './api.ts'
@@ -1538,6 +1538,8 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
     String(FIXTURE_IMAGE_REF.attachmentId),
     { attachment: FIXTURE_IMAGE_REF, data: FIXTURE_IMAGE_DATA },
   ]])
+  /** [本地改造 2026-08-18] Voice rows accepted through session.prompt (durable beside image objects). */
+  const voiceAttachments = new Map<string, { attachment: VoiceAttachmentRef; data: string }>()
   /** Credential store double: set/unset flip the describe badge, values never read back. */
   const fixtureCredentials = new Map<string, true>([
     // The assembled fixture represents an already-configured shipped
@@ -2508,6 +2510,22 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         const userText = content.map(b => (b.type === 'text' ? b.text : '')).join('')
         const durable: ContentBlock[] = content.map((block) => {
           if (block.type === 'text') return block
+          if (block.type === 'voice') {
+            // [本地改造 2026-08-18] 语音块持久化为 durable voice row（与图片附件同策略）。
+            const voiceId = `fixture:${randomUuid()}`
+            const voiceAttachment: VoiceAttachmentRef = {
+              voiceId,
+              mediaType: block.mediaType,
+              bytes: Math.max(
+                1,
+                Math.floor(block.data.length * 3 / 4)
+                - (block.data.endsWith('==') ? 2 : block.data.endsWith('=') ? 1 : 0),
+              ),
+              ...block.durationMs === undefined ? {} : { durationMs: block.durationMs },
+            }
+            voiceAttachments.set(voiceId, { attachment: voiceAttachment, data: block.data })
+            return { type: 'voice', attachment: voiceAttachment }
+          }
           const attachment: ImageAttachmentRef = {
             attachmentId: `fixture:${randomUuid()}` as AttachmentIdType,
             mediaType: block.mediaType,
@@ -2585,6 +2603,20 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         }
         return ok(request, stored)
       },
+      voice: (request) => {
+        const stored = voiceAttachments.get(String(request.payload.voiceId))
+        if (stored === undefined) {
+          return err(request, {
+            code: 'attachment-error',
+            message: 'fixture voice missing',
+            details: { reason: 'VOICE_NOT_FOUND' },
+          })
+        }
+        return ok(request, stored)
+      },
+      voiceAsr: async request => ok(request, { text: 'fixture text' }),
+      voiceTts: async request => ok(request, { mediaType: 'audio/mpeg', data: 'SUQz', durationMs: 800 }),
+      sendVoiceMessage: async request => ok(request, { accepted: true as const }),
       updateQueue: request => err(request, {
         code: 'queue-item-not-found',
         message: 'fixture has no pending queue item',
@@ -2600,6 +2632,10 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         }
         return ok(request, { accepted: true as const })
       },
+    },
+    balance: {
+      // [本地改造] 余额展示已迁移至插件；fixture 不提供真实余额。
+      get: async request => ok(request, { balance: null }),
     },
     subagents: {
       list: request => ok(request, { entries: [], parentAvailable: true }),
@@ -3185,6 +3221,10 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'session.fork': return this.api.sessions.fork(request)
       case 'session.prompt': return this.api.sessions.prompt(request)
       case 'session.attachment': return this.api.sessions.attachment(request)
+      case 'session.voice': return this.api.sessions.voice(request)
+      case 'session.voiceAsr': return this.api.sessions.voiceAsr(request)
+      case 'session.voiceTts': return this.api.sessions.voiceTts(request)
+      case 'session.sendVoiceMessage': return this.api.sessions.sendVoiceMessage(request)
       case 'session.updateQueue': return this.api.sessions.updateQueue(request)
       case 'session.cancel': return this.api.sessions.cancel(request)
       case 'subagent.list': return this.api.subagents.list(request)
@@ -3227,6 +3267,8 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'llm.providers': return this.api.llm.providers(request)
       case 'llm.models': return this.api.llm.models(request)
       case 'llm.discoverModels': return this.api.llm.discoverModels(request, signal)
+      default:
+        throw new Error(`fixture: unhandled rpc method ${method}`)
     }
   }
 

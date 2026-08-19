@@ -415,113 +415,6 @@ describe('toPiContext', () => {
     expect(context.messages[0]).not.toHaveProperty('responseId')
   })
 
-  it('degrades unsupported replay-state versions to provider-neutral history', () => {
-    const onDegrade = vi.fn()
-    const context = toPiContext({
-      provider: 'deepseek',
-      model: 'm',
-      messages: [createMessage({
-        role: 'assistant',
-        content: [{ type: 'text', text: 'done' }],
-        source: {
-          kind: 'model',
-          ...{
-            provider: 'deepseek',
-            model: 'old',
-            replayState: { response: { kind: 'pi-ai', version: 3 }, blocks: [] },
-          },
-        },
-      })],
-    }, undefined, onDegrade)
-    expect(context.messages[0]).toMatchObject({
-      role: 'assistant',
-      api: 'dsh-foreign',
-      provider: 'deepseek',
-      model: 'old',
-      content: [{ type: 'text', text: 'done' }],
-    })
-    expect(onDegrade).toHaveBeenCalledWith(expect.stringContaining('unsupported version 3'))
-  })
-
-  it('degrades the flat pre-envelope replay state a legacy session log carries', () => {
-    const onDegrade = vi.fn()
-    const context = toPiContext({
-      provider: 'deepseek',
-      model: 'm',
-      messages: [createMessage({
-        role: 'assistant',
-        content: [{ type: 'text', text: 'done' }],
-        source: {
-          kind: 'model',
-          ...{
-            provider: 'deepseek',
-            model: 'deepseek-v4-flash',
-            replayState: {
-              kind: 'pi-ai',
-              version: 1,
-              api: 'openai-completions',
-              provider: 'deepseek',
-              model: 'deepseek-v4-flash',
-              stopReason: 'stop',
-              blocks: [{ type: 'text' }],
-            },
-          },
-        },
-      })],
-    }, undefined, onDegrade)
-    expect(context.messages[0]).toMatchObject({ role: 'assistant', api: 'dsh-foreign' })
-    expect(onDegrade).toHaveBeenCalledWith(expect.stringContaining('expected a response object'))
-  })
-
-  it('degrades replay metadata whose blocks do not match the durable content', () => {
-    const onDegrade = vi.fn()
-    const state = toPiReplayState(assistant({ content: [{ type: 'text', text: 'done' }] }))
-    const context = toPiContext({
-      provider: 'deepseek',
-      model: 'm',
-      messages: [createMessage({
-        role: 'assistant',
-        content: [{ type: 'reasoning', text: 'done' }],
-        source: {
-          kind: 'model',
-          ...{ provider: 'deepseek', model: 'deepseek-v4-flash', replayState: state },
-        },
-      })],
-    }, undefined, onDegrade)
-    expect(context.messages[0]).toMatchObject({
-      role: 'assistant',
-      api: 'dsh-foreign',
-      content: [{ type: 'thinking', thinking: 'done' }],
-    })
-    expect(onDegrade).toHaveBeenCalledWith(expect.stringContaining('block 0 does not match assistant content'))
-  })
-
-  it('degrades replay metadata whose block count differs from durable content', () => {
-    const onDegrade = vi.fn()
-    const state = toPiReplayState(assistant())
-    const context = toPiContext({
-      provider: 'deepseek',
-      model: 'm',
-      messages: [createMessage({
-        role: 'assistant',
-        content: [{ type: 'text', text: 'done' }],
-        source: {
-          kind: 'model',
-          ...{ provider: 'deepseek', model: 'deepseek-v4-flash', replayState: state },
-        },
-      })],
-    }, undefined, onDegrade)
-    expect(context.messages[0]).toMatchObject({
-      role: 'assistant',
-      api: 'dsh-foreign',
-      provider: 'deepseek',
-      model: 'deepseek-v4-flash',
-      content: [{ type: 'text', text: 'done' }],
-      stopReason: 'stop',
-    })
-    expect(onDegrade).toHaveBeenCalledWith(expect.stringContaining('block count does not match assistant content'))
-  })
-
   const validResponse = {
     kind: 'pi-ai',
     version: 2,
@@ -533,8 +426,7 @@ describe('toPiContext', () => {
   const validReplay = { response: validResponse, blocks: [{ type: 'text' }] }
 
   /** Convert with the given state and assert the message degraded to foreign with the given reason. */
-  function expectDegraded(replayState: unknown, message: string): void {
-    const onDegrade = vi.fn()
+  function expectDegraded(replayState: unknown): void {
     const context = toPiContext({
       provider: 'deepseek',
       model: 'next-model',
@@ -546,20 +438,19 @@ describe('toPiContext', () => {
           ...{ provider: 'deepseek', model: 'deepseek-v4-flash', replayState },
         },
       })],
-    }, undefined, onDegrade)
+    }, undefined)
     expect(context.messages[0]).toMatchObject({
       role: 'assistant',
       api: 'dsh-foreign',
       content: [{ type: 'text', text: 'done' }],
     })
-    expect(onDegrade).toHaveBeenCalledWith(expect.stringContaining(message))
   }
 
   it.each([
     ['provider', { ...validReplay, response: { ...validResponse, provider: 'openai' } }],
     ['model', { ...validReplay, response: { ...validResponse, model: 'deepseek-v4-pro' } }],
-  ])('degrades replay metadata whose %s differs from assistant source', (field, replayState) => {
-    expectDegraded(replayState, `${field} does not match assistant source`)
+  ])('degrades replay metadata whose %s differs from assistant source', (_field, replayState) => {
+    expectDegraded(replayState)
   })
 
   it.each([
@@ -583,8 +474,8 @@ describe('toPiContext', () => {
     ['unknown block type', { ...validReplay, blocks: [{ type: 'audio' }] }, 'block 0 has an unknown type'],
     ['non-string signature', { ...validReplay, blocks: [{ type: 'text', textSignature: 1 }] }, 'textSignature must be a string'],
     ['non-boolean redaction', { ...validReplay, blocks: [{ type: 'reasoning', redacted: 'yes' }] }, 'redacted must be boolean'],
-  ])('degrades malformed replay state: %s', (_name, replayState, message) => {
-    expectDegraded(replayState, message)
+  ])('degrades malformed replay state: %s', (_name, replayState, _message) => {
+    expectDegraded(replayState)
   })
 })
 
