@@ -6,6 +6,30 @@
 
 ---
 
+## 快速开始（含内置语音插件）
+
+本 fork **内置了语音能力插件**（`internal-plugins/dsh-input-tools/`：语音输入/多引擎 TTS/ASR/
+音色克隆/语音气泡/AI 语音回复），clone 后一键配置即可用：
+
+```bash
+git clone https://github.com/oadank/deepseek-harness.git
+cd deepseek-harness
+# Windows：一键配置（装插件到 profile + 注册 + 检查 ffmpeg）
+powershell -ExecutionPolicy Bypass -File scripts\setup-profile.ps1
+# Linux/macOS：
+bash scripts/setup-profile.sh
+pnpm install
+pnpm run build:web
+dsh --profile web
+```
+
+可选本地 ASR（离线识别）：Windows 运行
+`internal-plugins\dsh-input-tools\scripts\install-asr.ps1`。
+升级：`git pull` 后重跑 setup 脚本即可同步插件。详细说明见
+[插件 README](internal-plugins/dsh-input-tools/README.md)。
+
+---
+
 ## 与官方仓库的核心差异
 
 | 维度 | 上游官方 | 本 fork |

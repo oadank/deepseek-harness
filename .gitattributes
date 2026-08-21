@@ -11,3 +11,6 @@
 # Pairing records are generated from the three confirmed owner-blob pairs.
 # The worktree-local installer registers the fail-closed driver command.
 *.i18n.yaml merge=dsh-translation-pairing
+
+# 语音补丁文件是 diff 数据，允许尾随空格（git diff --cached --check 跳过）
+*.patch -whitespace

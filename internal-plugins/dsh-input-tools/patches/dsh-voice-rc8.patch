@@ -1,0 +1,3781 @@
+diff --git a/packages/api/remotes/src/client/index.ts b/packages/api/remotes/src/client/index.ts
+index 6a5164f160..f5a57a5e65 100644
+--- a/packages/api/remotes/src/client/index.ts
++++ b/packages/api/remotes/src/client/index.ts
+@@ -44,6 +44,7 @@ export type {
+   RpcRequest, RpcResponse, RpcResult, SessionId, SessionModels, SessionSearchItem,
+   SessionSummary, SettingsNamespaceView, SettingsPathOpView, SkillEntry, StreamChunk,
+   SubagentAddress, SubagentCatalog, JobView, ToolCallView, ToolEventView, ToolResultView,
++  VoiceAttachmentRef, VoiceMediaType,
+   WorkspaceId, WorkspaceView,
+ } from '@deepseek-ai/dsh-client-connection/client'
+ export type {} from '@deepseek-ai/dsh-api-gateway/client'
+diff --git a/packages/attachment/attachment/src/error.ts b/packages/attachment/attachment/src/error.ts
+index 2e2d695dae..c91a4f862f 100644
+--- a/packages/attachment/attachment/src/error.ts
++++ b/packages/attachment/attachment/src/error.ts
+@@ -23,6 +23,7 @@ export type AttachmentErrorCode =
+   | 'ATTACHMENT_WRITE_FAILED'
+   | 'ATTACHMENT_NOT_FOUND'
+   | 'ATTACHMENT_READ_FAILED'
++  | 'VOICE_ASR_FAILED'
+ 
+ /** Runtime membership for structurally compatible errors crossing package boundaries. */
+ const IMAGE_ADMISSION_ERROR_CODE_SET: ReadonlySet<string> = new Set(IMAGE_ADMISSION_ERROR_CODES)
+diff --git a/packages/client/connection/src/api-request-trust.ts b/packages/client/connection/src/api-request-trust.ts
+index ea8914ccc6..1985ca7d08 100644
+--- a/packages/client/connection/src/api-request-trust.ts
++++ b/packages/client/connection/src/api-request-trust.ts
+@@ -105,6 +105,21 @@ export function isTrustedApiRequest(request: ApiTrustRequest, trustedHosts: read
+   if (host === undefined) return false
+   const hostUrl = parseAuthority(host)
+   if (hostUrl === undefined) return false
++  // [本地改造 2026-08-14] tailnet 域名（Tailscale *.ts.net）视为可信：
++  // 本机通过 tailscale serve 转发（https://lecoo.tailb5f10f.ts.net → 127.0.0.1:3080）
++  // 访问时 Host/Origin 是 *.ts.net，trustedHosts 参数在 nssm 环境下注入失败，
++  // 直接信任 tailnet 域名（仅本 tailnet 可达，非公开攻击面）。
++  if (hostUrl.hostname.endsWith('.ts.net')) {
++    const origin = header(request.headers, 'origin')
++    if (origin !== undefined) {
++      try {
++        if (new URL(origin).hostname.endsWith('.ts.net')) return true
++      } catch {
++        return false
++      }
++    }
++    return true
++  }
+   if (!isLoopbackHostname(hostUrl.hostname) && !isTrustedAuthority(hostUrl, trustedHosts)) return false
+   // Cross-site fence: modern browsers label the initiator relationship on
+   // every fetch; an explicit cross-site marker is refused regardless of Origin.
+diff --git a/packages/client/connection/src/client/api.ts b/packages/client/connection/src/client/api.ts
+index 1b7627b293..c89661c80d 100644
+--- a/packages/client/connection/src/client/api.ts
++++ b/packages/client/connection/src/client/api.ts
+@@ -16,6 +16,7 @@ export type {
+   GoalsApi, GoalRef,
+   SettingsApi, SettingsNamespaceView, SettingsPathOpView, SettingsSecretView,
+   CredentialsApi, CredentialView, ConfigurableProviderView, DiscoveredModelView, LlmApi,
++  BalanceApi, BalanceView, VoiceAttachmentRef, VoiceMediaType,
+   SubagentsApi, SubagentAddress, SubagentCatalog, SubagentListEntry, SubagentPromptReceipt,
+   JobView,
+ } from '@deepseek-ai/dsh-host-apiproxy/api'
+diff --git a/packages/client/connection/src/client/index.ts b/packages/client/connection/src/client/index.ts
+index 9847d48cdf..a398bfdafd 100644
+--- a/packages/client/connection/src/client/index.ts
++++ b/packages/client/connection/src/client/index.ts
+@@ -29,6 +29,7 @@ export type {
+   GoalsApi, GoalRef,
+   SettingsApi, SettingsNamespaceView, SettingsPathOpView, SettingsSecretView,
+   CredentialsApi, CredentialView, ConfigurableProviderView, DiscoveredModelView, LlmApi,
++  BalanceApi, BalanceView, VoiceAttachmentRef, VoiceMediaType,
+ } from './api.ts'
+ export {
+   RpcId,
+@@ -103,7 +104,12 @@ export function apply(ctx: Context): void {
+   }
+   const handle: ConnectionHandle = {
+     api,
+-    isLoopback: pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
++    // [本地改造 2026-08-15] tailnet 域名（*.ts.net）与回环同等视为可信持久化来源：
++    // host 端 fence 已信任 ts.net（见 api-request-trust.ts），此处同步放宽，
++    // 否则远程浏览器（tailscale serve 访问）settings 走 memory 模式，
++    // busyEnter 等设置刷新即丢（用户选"插队"后回默认"排队"）。
++    isLoopback: pageLocation === undefined || isLoopbackHostname(pageLocation.hostname)
++      || (typeof pageLocation.hostname === 'string' && pageLocation.hostname.endsWith('.ts.net')),
+     hostDescription: {
+       getSnapshot: () => description,
+       subscribe: (listener) => {
+diff --git a/packages/client/runtime/src/client/contract/session.ts b/packages/client/runtime/src/client/contract/session.ts
+index e07267d487..c47da28c4a 100644
+--- a/packages/client/runtime/src/client/contract/session.ts
++++ b/packages/client/runtime/src/client/contract/session.ts
+@@ -9,7 +9,7 @@
+  */
+ import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+ import type {
+-  MessageId, PromptContentPart, QueueAction, RpcResult, SessionId,
++  MessageId, PromptContentPart, QueueAction, RpcResult, SessionId, VoiceAttachmentRef,
+ } from '@deepseek-ai/dsh-api-remotes/client'
+ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+ import type { ConversationSnapshot } from '../sessions/conversation.ts'
+@@ -51,6 +51,14 @@ export interface ISession {
+   readAttachment(
+     attachmentId: AttachmentIdType,
+   ): Promise<RpcResult<{ attachment: ImageAttachmentRef; data: Uint8Array }>>
++  /**
++   * Resolve one durable voice object referenced by this session.
++   * @param voiceId - opaque id found in the folded session log.
++   * @returns the authenticated reference and decoded bytes.
++   */
++  readVoice(
++    voiceId: string,
++  ): Promise<RpcResult<{ attachment: VoiceAttachmentRef; data: Uint8Array }>>
+   /**
+    * Apply one edit, remove, or strict steer action to a still-pending queue occurrence.
+    * @param itemId - agent-owned inbox occurrence identity.
+diff --git a/packages/client/runtime/src/client/sessions/session.ts b/packages/client/runtime/src/client/sessions/session.ts
+index 02939cf28f..06b447411e 100644
+--- a/packages/client/runtime/src/client/sessions/session.ts
++++ b/packages/client/runtime/src/client/sessions/session.ts
+@@ -5,7 +5,7 @@ import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-atta
+ import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
+ import type {
+   HistoryEntry, IApiClient, MessageId, MuxFrame, PromptContentPart, QueueAction, RpcError,
+-  RpcId, RpcResponse, RpcResult, SessionId, SubagentAddress, ToolEventView,
++  RpcId, RpcResponse, RpcResult, SessionId, SubagentAddress, ToolEventView, VoiceAttachmentRef,
+ } from '@deepseek-ai/dsh-api-remotes/client'
+ // Value import from the inline-safe wire layer (not the connection plugin):
+ // plugin-to-plugin value imports are a bundle purity error.
+@@ -285,6 +285,28 @@ export class Session implements SessionFace {
+     }
+   }
+ 
++  /**
++   * Resolve one voice object referenced by this session into browser-consumable bytes.
++   * @param voiceId - opaque id found in the folded session log.
++   * @returns the authenticated reference and decoded bytes.
++   */
++  async readVoice(
++    voiceId: string,
++  ): Promise<RpcResult<{ attachment: VoiceAttachmentRef; data: Uint8Array }>> {
++    try {
++      const result = (await this.api.sessions.voice({
++        sessionId: this.sessionId,
++        voiceId,
++      })).result
++      if (!result.ok) return result
++      const binary = atob(result.value.data)
++      const data = Uint8Array.from(binary, char => char.charCodeAt(0))
++      return { ok: true, value: { attachment: result.value.attachment, data } }
++    } catch (error) {
++      return transportError(error)
++    }
++  }
++
+   /** Apply one operation to a still-pending queue occurrence. */
+   async updateQueue(itemId: MessageId, action: QueueAction): Promise<RpcResult<{ accepted: true }>> {
+     try {
+diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
+index 294009a09b..8974f4bbeb 100644
+--- a/packages/client/ui-conversation/src/client/apply.ts
++++ b/packages/client/ui-conversation/src/client/apply.ts
+@@ -248,6 +248,7 @@ export function apply(ctx: Context): void {
+       return {
+         views,
+         releaseSessionImages: (id) => { conversation.releaseSessionImages(id) },
++        releaseSessionVoices: (id) => { conversation.releaseSessionVoices(id) },
+         bindDraftMirror: write => inputHub.shell(sessionId).bindMirror(write),
+       }
+     },
+@@ -299,6 +300,10 @@ export function apply(ctx: Context): void {
+           toggleCommandMenu: undefined,
+           stop: undefined,
+           command: undefined,
++          readBalance: undefined,
++          sendVoice: undefined,
++          transcribeVoice: undefined,
++          synthesizeVoice: undefined,
+           hooks: { notices: ABSENT_NOTICES, lexicon: ABSENT_LEXICON, menuLauncher: ABSENT_MENU_LAUNCHER },
+         }
+       }
+@@ -354,6 +359,42 @@ export function apply(ctx: Context): void {
+           const result = await session.command(line)
+           return result.ok && result.value.matched
+         },
++        readBalance: async () => {
++          const connection = ctx.get('connection') as { api: import('@deepseek-ai/dsh-client-connection/client').IApiClient } | undefined
++          if (connection === undefined) return { balance: null }
++          const response = await connection.api.balance.get({ sessionId })
++          if (!response.result.ok) return { balance: null }
++          return response.result.value
++        },
++        sendVoice: async (part, mode) => {
++          const session = sessions.binding(sessionId)?.session
++          if (session === undefined) return false
++          const result = await session.prompt([part], mode)
++          return result.ok
++        },
++        transcribeVoice: async (part) => {
++          const connection = ctx.get('connection') as { api: import('@deepseek-ai/dsh-client-connection/client').IApiClient } | undefined
++          if (connection === undefined) return null
++          const response = await connection.api.sessions.voiceAsr({
++            sessionId,
++            mediaType: part.mediaType,
++            data: part.data,
++            ...(part.durationMs === undefined ? {} : { durationMs: part.durationMs }),
++          })
++          if (!response.result.ok) return null
++          return response.result.value.text
++        },
++        synthesizeVoice: async (text, provider) => {
++          const connection = ctx.get('connection') as { api: import('@deepseek-ai/dsh-client-connection/client').IApiClient } | undefined
++          if (connection === undefined) return null
++          const response = await connection.api.sessions.voiceTts({
++            sessionId,
++            text,
++            ...(provider === undefined || provider === '' ? {} : { provider }),
++          })
++          if (!response.result.ok) return null
++          return response.result.value
++        },
+         hooks: {
+           notices: shell.notices,
+           lexicon: shell.lexicon,
+@@ -402,6 +443,18 @@ export function apply(ctx: Context): void {
+         },
+         loadOlder: () => { void scoped.loadOlder() },
+         loadImage: attachment => conversation.resolveImage(sessionId, attachment),
++        loadVoice: attachment => conversation.resolveVoice(sessionId, attachment),
++        synthesizeVoice: async (text, provider) => {
++          const connection = ctx.get('connection') as { api: import('@deepseek-ai/dsh-client-connection/client').IApiClient } | undefined
++          if (connection === undefined) return null
++          const response = await connection.api.sessions.voiceTts({
++            sessionId,
++            text,
++            ...(provider === undefined || provider === '' ? {} : { provider }),
++          })
++          if (!response.result.ok) return null
++          return response.result.value
++        },
+         // Unregistered 'trajectory' id is safe: the tab ring falls back to
+         // the first view, and the untouched inspect target stays inert.
+         inspectCall: (callId) => {
+diff --git a/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx b/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx
+index bc9c96fd41..ba2b5ae040 100644
+--- a/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx
++++ b/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx
+@@ -18,7 +18,7 @@ type RoutedChatNodeOwner = {
+ /** Subscribe and dispatch one stable Context key without observing sibling Nodes. */
+ export const ChatNodeSeat = memo(function ChatNodeSeat({
+   nodeKey, selectedCallId, cwd, openFile, inspectCall, forkAt,
+-  renderMessageImages, fileMentions, useSession, renderSlot, t,
++  renderMessageImages, loadImage, loadVoice, fileMentions, useSession, renderSlot, t,
+ }: ChatNodeSeatProps) {
+   const node = useSession(snapshot => snapshot.chat.nodes.get(nodeKey))
+   const routedNode = node as ChatNode | undefined
+@@ -31,9 +31,12 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
+       inspectCall,
+       forkAt,
+       renderMessageImages,
++      loadImage,
++      loadVoice,
+       fileMentions,
+     }, [
+-    node, selectedCallId, cwd, openFile, inspectCall, forkAt, renderMessageImages, fileMentions,
++    node, selectedCallId, cwd, openFile, inspectCall, forkAt, renderMessageImages, loadImage, loadVoice,
++    fileMentions,
+   ])
+   if (routedNode === undefined || owner === null) return null
+   // Runtime dispatch owns the correlation: every Node's discriminant is the
+diff --git a/packages/client/ui-conversation/src/client/chat/ChatView.module.css b/packages/client/ui-conversation/src/client/chat/ChatView.module.css
+index ffee12984f..639b4f97e9 100644
+--- a/packages/client/ui-conversation/src/client/chat/ChatView.module.css
++++ b/packages/client/ui-conversation/src/client/chat/ChatView.module.css
+@@ -131,6 +131,19 @@
+   justify-content: center;
+ }
+ 
++/* [本地改造 2026-08-16] 语音铁律回复：左对齐行，位于最后一条助手消息下方。 */
++.ttsReplyRow {
++  display: flex;
++  justify-content: flex-start;
++  padding: 2px 0;
++}
++
++.ttsReplyPending {
++  color: var(--dsw-alias-label-tertiary);
++  font-size: 12px;
++  line-height: 28px;
++}
++
+ .older button {
+   border: none;
+   border-radius: 14px;
+diff --git a/packages/client/ui-conversation/src/client/chat/ChatView.tsx b/packages/client/ui-conversation/src/client/chat/ChatView.tsx
+index 80f9bc2d73..22c3fec2d6 100644
+--- a/packages/client/ui-conversation/src/client/chat/ChatView.tsx
++++ b/packages/client/ui-conversation/src/client/chat/ChatView.tsx
+@@ -156,7 +156,7 @@ function TurnStatus({ startTime, t }: {
+  * ordered business Node crosses the keyed renderer seat.
+  */
+ export function ChatView({
+-  useSession, useSessions, useStore, renderSlot, sessionId, openFile, loadOlder, loadImage, inspectCall, chatScroll, forkAt,
++  useSession, useSessions, useStore, renderSlot, sessionId, openFile, loadOlder, loadImage, loadVoice, inspectCall, chatScroll, forkAt,
+   fileMentions, t,
+ }: ChatViewSlotProps) {
+   const order = useSession(s => s.chat.order)
+@@ -440,6 +440,8 @@ export function ChatView({
+               inspectCall={inspectCall}
+               forkAt={forkAt}
+               renderMessageImages={renderMessageImages}
++              loadImage={loadImage}
++              loadVoice={loadVoice}
+               fileMentions={fileMentions}
+               renderSlot={renderSlot}
+               t={t}
+@@ -456,6 +458,7 @@ export function ChatView({
+               key={item.id}
+               content={item.content}
+               renderMessageImages={renderMessageImages}
++              loadVoice={loadVoice}
+               t={t}
+             />
+           ))}
+diff --git a/packages/client/ui-conversation/src/client/chat/MessageItem.module.css b/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
+index 54e5f6f98d..0ef782e759 100644
+--- a/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
++++ b/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
+@@ -16,6 +16,101 @@
+   min-width: 0;
+   max-width: min(525px, 82%);
+ }
++
++/* [本地改造 2026-08-16] 语音消息卡片：播放按钮 + 时长，右对齐气泡风格。 */
++.voiceCard {
++  display: inline-flex;
++  align-items: center;
++  gap: 8px;
++  max-width: 100%;
++  height: 44px;
++  padding: 0 16px 0 10px;
++  background: var(--dsw-specific-bubble);
++  border-radius: 22px;
++  /* [本地改造 2026-08-16] 无 transcript 的语音按时长定宽，宽度须含 padding。 */
++  box-sizing: border-box;
++}
++
++.voicePlay {
++  display: grid;
++  place-items: center;
++  flex: none;
++  width: 28px;
++  height: 28px;
++  border: none;
++  border-radius: 999px;
++  background: var(--dsw-specific-selector);
++  color: var(--dsw-alias-label-primary);
++  cursor: pointer;
++}
++
++.voicePlay:hover:not(:disabled) {
++  background: var(--dsw-alias-interactive-bg-hover-solid);
++}
++
++.voicePlay:disabled {
++  opacity: 0.5;
++  cursor: default;
++}
++
++.voiceDuration {
++  color: var(--dsw-alias-label-secondary);
++  font-size: 13px;
++  line-height: 20px;
++  font-variant-numeric: tabular-nums;
++}
++
++/* [本地改造 2026-08-16] 语音识别文本（host ASR 写入 attachment.transcript）。 */
++.voiceTranscript {
++  display: block;
++  max-width: 320px;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  color: var(--dsw-alias-label-secondary);
++  font-size: 12px;
++  line-height: 16px;
++}
++
++/* [本地改造 2026-08-21] ASR 失败（无 transcript）时的弱提示。 */
++.voiceTranscriptFailed {
++  display: block;
++  max-width: 320px;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  color: var(--dsw-alias-label-tertiary);
++  font-size: 12px;
++  line-height: 16px;
++  opacity: 0.85;
++}
++
++/* [本地改造 2026-08-21] 语音条内置复制按钮（对齐系统 .action：28px 圆形透明）。 */
++.voiceCopy {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  width: 28px;
++  height: 28px;
++  padding: 6px;
++  border: none;
++  border-radius: 28px;
++  background: transparent;
++  color: var(--dsw-alias-label-tertiary);
++  cursor: pointer;
++  flex-shrink: 0;
++}
++.voiceCopy:hover {
++  background: var(--dsw-alias-interactive-bg-hover);
++  color: var(--dsw-alias-label-secondary);
++}
++
++/* [本地改造 2026-08-16] 助手语音回复独立横条：左对齐，与用户语音消息同级。 */
++.voiceReplyRow {
++  display: flex;
++  justify-content: flex-start;
++  padding: 2px 0;
++}
+ .bubble {
+   /* 525px cap inside the 736 column; percentage keeps narrow windows sane. */
+   max-width: 100%;
+diff --git a/packages/client/ui-conversation/src/client/chat/MessageItem.tsx b/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
+index 8a882a70c5..67aa18ba1a 100644
+--- a/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
++++ b/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
+@@ -3,11 +3,13 @@
+ // assistant answers), pending steering (copy only), context injection,
+ // compaction marker, retry disclosure, and unknown-surface JSON rows.
+ 
+-import { memo, useEffect, useMemo, useState } from 'react'
++import { memo, useEffect, useMemo, useRef, useState } from 'react'
+ import type { ReactNode } from 'react'
+ import type {
+   ModelRetryNode, TurnErrorNode, UserMessageNode,
+ } from '@deepseek-ai/dsh-client-runtime/client'
++import type { VoiceAttachmentRef } from '@deepseek-ai/dsh-client-connection/client'
++import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+ import { JsonBlock, MessageText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
+ import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
+@@ -17,14 +19,40 @@ import { MessageIconActions } from './MessageIconActions.tsx'
+ import css from './MessageItem.module.css'
+ 
+ type UserImage = Extract<UserMessageNode['content'][number], { type: 'image' }>
++type UserVoice = Extract<UserMessageNode['content'][number], { type: 'voice' }>
++
++// [本地改造 2026-08-18] 微信式语音互斥：同一时刻只播一条语音。点新的自动停旧的，
++// 避免多个 <audio> 同时发声混在一起。模块级单例，跨卡片共享。
++let activeVoice: { id: string; audio: HTMLAudioElement; setPlaying: (playing: boolean) => void } | null = null
++
++function playExclusive(id: string, audio: HTMLAudioElement, setPlaying: (playing: boolean) => void): void {
++  if (activeVoice !== null && activeVoice.id !== id) {
++    activeVoice.audio.pause()
++    activeVoice.setPlaying(false)
++  }
++  activeVoice = { id, audio, setPlaying }
++  setPlaying(true)
++}
++
++// [本地改造 2026-08-18] 录音互斥：InputBar 开始录音时调用，停掉正在播放的语音，
++// 避免外放声音被麦克风录进新语音（回声）。
++export function stopVoicePlayback(): void {
++  if (activeVoice !== null) {
++    activeVoice.audio.pause()
++    activeVoice.setPlaying(false)
++    activeVoice = null
++  }
++}
+ 
+ function contentParts(content: readonly unknown[]): {
+   text: string
+   images: { attachment: UserImage['attachment'] }[]
++  voices: { attachment: UserVoice['attachment'] }[]
+   rest: unknown[]
+ } {
+   const texts: string[] = []
+   const images: { attachment: UserImage['attachment'] }[] = []
++  const voices: { attachment: UserVoice['attachment'] }[] = []
+   const rest: unknown[] = []
+   for (const block of content) {
+     const b = block as { type?: string; text?: string; attachment?: unknown }
+@@ -32,9 +60,12 @@ function contentParts(content: readonly unknown[]): {
+     else if (b.type === 'image' && b.attachment !== undefined) {
+       images.push({ attachment: (b as UserImage).attachment })
+     }
++    else if (b.type === 'voice' && b.attachment !== undefined) {
++      voices.push({ attachment: (b as UserVoice).attachment })
++    }
+     else rest.push(block)
+   }
+-  return { text: texts.join(''), images, rest }
++  return { text: texts.join(''), images, voices, rest }
+ }
+ 
+ function retrySeconds(milliseconds: number): number {
+@@ -212,27 +243,198 @@ function projectUserText(text: string, sessionLabels: readonly string[]): ReactN
+   return <>{parts}</>
+ }
+ 
++/** [本地改造 2026-08-16] 语音条宽度：4 秒内固定 96px（短语音不显拥挤），超过后每增 1 秒 +4px，上限 320px。 */
++function voiceCardWidth(seconds: number): number {
++  if (seconds <= 4) return 96
++  return Math.min(320, 96 + (seconds - 4) * 4)
++}
++
++/** Right-aligned voice message card: session-authorized playback with duration. */
++export function VoiceCard({ attachment, load, actions, asrFailedHint = false, t }: {
++  attachment: VoiceAttachmentRef
++  load?: (ref: VoiceAttachmentRef) => Promise<string>
++  /** [本地改造 2026-08-21] Voice-actions slot strip rendered at the card tail. */
++  actions?: ReactNode
++  /** [本地改造 2026-08-21] 无转写时是否显示「未能识别」提示：仅用户语音消息
++   *  开启；助手 TTS 语音回复没有 transcript 概念，不显示。 */
++  asrFailedHint?: boolean
++  t: ChatViewSlotProps['t']
++}) {  const [url, setUrl] = useState<string | null>(null)
++  const [failed, setFailed] = useState(false)
++  const [playing, setPlaying] = useState(false)
++  const [copied, setCopied] = useState(false)
++  const audioRef = useRef<HTMLAudioElement | null>(null)
++  useEffect(() => {
++    let cancelled = false
++    setFailed(false)
++    setUrl(null)
++    // A missing loader (deployment without the voice channel) degrades to the
++    // disabled card rather than crashing the whole message row.
++    if (load === undefined) {
++      setFailed(true)
++      return () => { cancelled = true }
++    }
++    load(attachment).then((next) => {
++      if (!cancelled) setUrl(next)
++    }, () => {
++      if (!cancelled) setFailed(true)
++    })
++    return () => { cancelled = true }
++  }, [attachment, load])
++  const toggle = (): void => {
++    const audio = audioRef.current
++    if (audio === null) return
++    if (playing) {
++      audio.pause()
++      if (activeVoice?.id === attachment.voiceId) activeVoice = null
++    } else {
++      playExclusive(attachment.voiceId, audio, setPlaying)
++      void audio.play().catch(() => { setFailed(true) })
++    }
++  }
++  const seconds = attachment.durationMs !== undefined
++    ? Math.max(1, Math.ceil(attachment.durationMs / 1_000))
++    : null
++  // [本地改造 2026-08-16] 语音条宽度按时长变化（微信风格）：8 秒以内固定宽度
++  // （短语音不显拥挤），超过 8 秒按秒数线性增宽，上限 320px；
++  // 带 transcript 的用户语音由文本自然撑宽（保持现状）。
++  const hasTranscript = attachment.transcript !== undefined && attachment.transcript !== ''
++  const durationWidth = !hasTranscript && attachment.durationMs !== undefined
++    ? { width: voiceCardWidth(seconds ?? 1) }
++    : undefined
++  return (
++    <div className={css.voiceCard} data-voice style={durationWidth}>
++      <button
++        type="button"
++        className={css.voicePlay}
++        aria-label={playing ? t('voice.pause') : t('voice.play')}
++        disabled={failed}
++        onClick={toggle}
++      >
++        {playing
++          ? (
++            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
++              <rect x="3.5" y="3.5" width="3" height="9" rx="1" fill="currentColor"/>
++              <rect x="9.5" y="3.5" width="3" height="9" rx="1" fill="currentColor"/>
++            </svg>
++          )
++          : (
++            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
++              <path d="M5 3.5L12.5 8L5 12.5V3.5Z" fill="currentColor"/>
++            </svg>
++          )}
++      </button>
++      <span className={css.voiceDuration}>{seconds === null ? '' : `${seconds}s`}</span>
++      {hasTranscript ? (
++        <span className={css.voiceTranscript} title={t('voice.transcriptLabel')}>
++          {attachment.transcript}
++        </span>
++      ) : asrFailedHint ? (
++        <span className={css.voiceTranscriptFailed} title={t('voice.asrFailed')}>
++          {t('voice.asrFailed')}
++        </span>
++      ) : null}
++      {/* [本地改造 2026-08-21] 语音条复制按钮：外部 voice-actions 优先（插件）；
++          未提供（如 AI 语音回复）且有转写时，用内置按钮兜底，保证所有语音条可复制。 */}
++      {actions !== undefined
++        ? actions
++        : (hasTranscript
++          ? (
++            <button
++              type="button"
++              className={css.voiceCopy}
++              aria-label={copied ? t('copied') : t('copy')}
++              title={copied ? t('copied') : t('copy')}
++              onClick={() => {
++                const text = attachment.transcript ?? ''
++                const done = (): void => {
++                  setCopied(true)
++                  window.setTimeout(() => setCopied(false), 1000)
++                }
++                if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
++                  void navigator.clipboard.writeText(text).then(done, done)
++                } else { done() }
++              }}
++            >
++              {copied
++                ? (
++                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
++                    <path d="M3.5 8.5L6.5 11.5L12.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
++                  </svg>
++                )
++                : (
++                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
++                    <rect x="5.5" y="5.5" width="7" height="7" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3"/>
++                    <path d="M10.5 5.5V4.5A1 1 0 0 0 9.5 3.5H5A1 1 0 0 0 4 4.5v4.5a1 1 0 0 0 1 1h1" fill="none" stroke="currentColor" strokeWidth="1.3"/>
++                  </svg>
++                )}
++            </button>
++          )
++          : null)}
++      {url !== null && (
++        <audio
++          ref={audioRef}
++          src={url}
++          onPlay={() => { setPlaying(true) }}
++          onPause={() => { setPlaying(false) }}
++          onEnded={() => { setPlaying(false) }}
++        />
++      )}
++    </div>
++  )
++}
++
+ /** Right-aligned bubble shared by user and steering rows. */
+ function UserStyleBubble({
+-  content, renderMessageImages, actions, pending = false, referenceLabels = [], t,
++  content,
++  renderMessageImages,
++  voiceLoader,
++  actions,
++  renderVoiceActions,
++  voiceAsrFailedHint = false,
++  pending = false,
++  referenceLabels = [],
++  t,
+ }: {
+   content: readonly unknown[]
+   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
++  voiceLoader: (ref: VoiceAttachmentRef) => Promise<string>
+   /** Optional IconActions (or similar) below the bubble; receives the joined text. */
+   actions?: (text: string) => ReactNode
++  /** [本地改造 2026-08-21] Voice-actions slot strip, resolved per voice card. */
++  renderVoiceActions?: (attachment: VoiceAttachmentRef, index: number) => ReactNode
++  /** [本地改造 2026-08-21] 语音无转写时显示「未能识别」提示（用户消息才开）。 */
++  voiceAsrFailedHint?: boolean
+   /** Whether this is the Host-authoritative pre-admission steering projection. */
+   pending?: boolean
+   /** Exact session mention labels associated by the adjacent recall node. */
+   referenceLabels?: readonly string[]
+   t: ChatViewSlotProps['t']
+ }): ReactNode {
+-  const { text, images, rest } = contentParts(content)
++  const { text, images, voices, rest } = contentParts(content)
++  // [本地改造 2026-08-21] 语音消息复制：把每条语音的转写文本并入复制文本。
++  // 纯语音消息本身没有 text 段，转写只挂在 attachment.transcript 上，否则复制按钮
++  // 写出的 text 为空，粘贴是空白。有文字时文本在前、转写按语音顺序追加在后。
++  const voiceTranscripts = voices
++    .map(v => v.attachment.transcript)
++    .filter((s): s is string => typeof s === 'string' && s !== '')
++  const copyText = [text, ...voiceTranscripts].join('\n').trim()
+   const truncated = (total: number): string => t('json.truncated', { total })
+   const showBubble = text !== '' || rest.length > 0
+   return (
+     <div className={css.userRow} data-pending-steering={pending || undefined} data-time-hover-root>
+       <div className={css.userStack}>
+         {renderMessageImages({ images, align: 'end' })}
++        {voices.map((voice, i) => (
++          <VoiceCard
++            key={i}
++            attachment={voice.attachment}
++            load={voiceLoader}
++            actions={renderVoiceActions?.(voice.attachment, i)}
++            asrFailedHint={voiceAsrFailedHint}
++            t={t}
++          />
++        ))}
+         {showBubble && <div className={css.bubble}>
+           {projectUserText(text, referenceLabels)}
+           {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
+@@ -243,7 +445,7 @@ function UserStyleBubble({
+           </div>
+         )}
+       </div>
+-      {actions?.(text)}
++      {actions?.(copyText)}
+     </div>
+   )
+ }
+@@ -254,15 +456,18 @@ function UserStyleBubble({
+  * @param props - Pending message content and conversation translator.
+  * @returns the pending steering bubble.
+  */
+-export function PendingSteeringBubble({ content, renderMessageImages, t }: {
++export function PendingSteeringBubble({ content, renderMessageImages, loadVoice, t }: {
+   content: readonly unknown[]
+   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
++  loadVoice?: (ref: VoiceAttachmentRef) => Promise<string>
+   t: ChatViewSlotProps['t']
+ }): ReactNode {
++  const voiceLoader = loadVoice ?? (() => Promise.reject(new Error(t('voice.loadFailed'))))
+   return (
+     <UserStyleBubble
+       content={content}
+       renderMessageImages={renderMessageImages}
++      voiceLoader={voiceLoader}
+       pending
+       t={t}
+       actions={text => (
+@@ -278,14 +483,36 @@ export function PendingSteeringBubble({ content, renderMessageImages, t }: {
+ }
+ 
+ /** User and admitted-steering keyed Chat renderer. */
++export type UserMessageNodeViewProps = ChatNodeViewProps<'user' | 'steering'>
++  & PropsRenderSlots<'conversation.chat.user-actions' | 'conversation.chat.voice-actions'>
++
+ export const UserMessageNodeView = memo(function UserMessageNodeView({
+-  node, renderMessageImages, t,
+-}: ChatNodeViewProps<'user' | 'steering'>) {
++  node, renderMessageImages, loadVoice, renderSlot, t,
++}: UserMessageNodeViewProps) {
+   const data = node.data
++  // [本地改造 2026-08-21] 用户消息操作行：语音转写只挂在 attachment.transcript 上、
++  // 不在 text 段，把转写文本作为 owner currency 交给 user-actions 槽
++  // （供「复制转写」类按钮直接使用，无需再按 id 回溯消息）。
++  const voiceTranscripts = data.content
++    .filter((b): b is UserVoice => b.type === 'voice')
++    .map(b => b.attachment.transcript)
++    .filter((s): s is string => typeof s === 'string' && s !== '')
++  const userActions = renderSlot('conversation.chat.user-actions', { seq: data.seq, voiceTranscripts })
++  // [本地改造 2026-08-21] 语音条尾部动作：逐条语音卡解析，给「复制转写」按钮
++  // 放在语音条最后面（卡片内、转写文本之后），而不是消息操作行里。
++  const renderVoiceActions = (attachment: VoiceAttachmentRef, index: number): ReactNode =>
++    renderSlot('conversation.chat.voice-actions', {
++      seq: data.seq,
++      index,
++      transcript: attachment.transcript ?? '',
++    })
+   return (
+     <UserStyleBubble
+       content={data.content}
+       renderMessageImages={renderMessageImages}
++      voiceLoader={loadVoice}
++      renderVoiceActions={renderVoiceActions}
++      voiceAsrFailedHint
+       {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
+       t={t}
+       actions={text => (
+@@ -294,6 +521,7 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
+           time={data.time}
+           clock="start"
+           className={css.actions}
++          extraActions={userActions}
+           t={t}
+         />
+       )}
+@@ -304,6 +532,10 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
+ /** Injected-context keyed Chat renderer. */
+ export const ContextMessageNodeView = memo(function ContextMessageNodeView({ node, t }: ChatNodeViewProps<'context'>) {
+   const data = node.data
++  // [本地改造 2026-08-16] 隐藏 vision-qa 图片识别的注入行：识别在后台完成，用户无感知
++  // （消息仍在会话日志、模型可见；用户只看到自己的图片消息与助手回复——正常图片交互）
++  const src = data.source as { kind?: string; plugin?: string } | null
++  if (src?.kind === 'plugin' && src.plugin === 'vision-qa') return null
+   return (
+     <ContextInjectionRow
+       content={data.content}
+diff --git a/packages/client/ui-conversation/src/client/chat/ReasoningRow.module.css b/packages/client/ui-conversation/src/client/chat/ReasoningRow.module.css
+index 6b2f6c0cd3..d0a54e34a6 100644
+--- a/packages/client/ui-conversation/src/client/chat/ReasoningRow.module.css
++++ b/packages/client/ui-conversation/src/client/chat/ReasoningRow.module.css
+@@ -66,6 +66,8 @@
+ }
+ 
+ .thinkBody {
++  max-height: 240px;
++  overflow-y: auto;
+   padding: 4px 0 4px 22px;
+   color: var(--dsw-alias-label-tertiary);
+   font-size: 14px;
+@@ -74,6 +76,16 @@
+   word-break: break-word;
+ }
+ 
++.thinkBody::-webkit-scrollbar-thumb {
++  border: 2px solid transparent;
++  background-clip: padding-box;
++  border-radius: 6px;
++}
++
++.thinkBody::-webkit-scrollbar-track {
++  margin: 4px 0;
++}
++
+ @media (prefers-reduced-motion: reduce) {
+   .root[data-state='running'] .row::after {
+     animation: none;
+diff --git a/packages/client/ui-conversation/src/client/chat/ReasoningRow.tsx b/packages/client/ui-conversation/src/client/chat/ReasoningRow.tsx
+index f8a340d20c..b048e65b08 100644
+--- a/packages/client/ui-conversation/src/client/chat/ReasoningRow.tsx
++++ b/packages/client/ui-conversation/src/client/chat/ReasoningRow.tsx
+@@ -27,6 +27,7 @@ function latestLine(text: string): string {
+ export function ReasoningRow({ text, running, t }: { text: string; running: boolean; t: ChatViewSlotProps['t'] }) {
+   const [expanded, setExpanded] = useState(false)
+   const summaryRef = useRef<HTMLSpanElement>(null)
++  const bodyRef = useRef<HTMLDivElement>(null)
+   const summary = running ? latestLine(text) : firstLine(text)
+   const scheduleSummaryScroll = useThrottledVisualUpdate(() => {
+     const element = summaryRef.current
+@@ -36,6 +37,13 @@ export function ReasoningRow({ text, running, t }: { text: string; running: bool
+   useEffect(() => {
+     scheduleSummaryScroll()
+   }, [running, scheduleSummaryScroll, summary])
++  // The expanded body is height-capped; keep the streamed tail visible while
++  // the row is open so new reasoning tokens never sit below the fold.
++  useEffect(() => {
++    if (!running || !expanded) return
++    const element = bodyRef.current
++    if (element !== null) element.scrollTop = element.scrollHeight
++  }, [running, expanded, text])
+ 
+   return (
+     <div className={css.root} data-variant="think" data-state={running ? 'running' : 'ok'}>
+@@ -58,7 +66,7 @@ export function ReasoningRow({ text, running, t }: { text: string; running: bool
+           </>
+         )}
+       >
+-        <div className={css.thinkBody}>{text}</div>
++        <div ref={bodyRef} className={css.thinkBody}>{text}</div>
+       </DisclosureRow>
+     </div>
+   )
+diff --git a/packages/client/ui-conversation/src/client/chat/TtsVoiceCard.module.css b/packages/client/ui-conversation/src/client/chat/TtsVoiceCard.module.css
+new file mode 100644
+index 0000000000..d89ae22df0
+--- /dev/null
++++ b/packages/client/ui-conversation/src/client/chat/TtsVoiceCard.module.css
+@@ -0,0 +1,43 @@
++/* Synthesized voice-reply pill (voice-iron-rule): left-aligned row under the
++   last assistant message, mirroring the user voice card's playback chrome. */
++
++.card {
++  display: inline-flex;
++  align-items: center;
++  gap: 8px;
++  height: 44px;
++  padding: 0 16px 0 10px;
++  border: 1px solid var(--dsw-alias-border-l1);
++  border-radius: 22px;
++  background: var(--dsw-alias-markdown-code-block);
++}
++
++.play {
++  display: grid;
++  place-items: center;
++  flex: none;
++  width: 28px;
++  height: 28px;
++  border: none;
++  border-radius: 999px;
++  background: var(--dsw-specific-selector);
++  color: var(--dsw-alias-label-primary);
++  cursor: pointer;
++}
++
++.play:hover {
++  background: var(--dsw-alias-interactive-bg-hover-solid);
++}
++
++.duration {
++  color: var(--dsw-alias-label-secondary);
++  font-size: 13px;
++  line-height: 20px;
++  font-variant-numeric: tabular-nums;
++}
++
++.label {
++  color: var(--dsw-alias-label-tertiary);
++  font-size: 12px;
++  line-height: 20px;
++}
+diff --git a/packages/client/ui-conversation/src/client/chat/TtsVoiceCard.tsx b/packages/client/ui-conversation/src/client/chat/TtsVoiceCard.tsx
+new file mode 100644
+index 0000000000..4e409bde8b
+--- /dev/null
++++ b/packages/client/ui-conversation/src/client/chat/TtsVoiceCard.tsx
+@@ -0,0 +1,67 @@
++// TtsVoiceCard: locally synthesized reply audio (voice-iron-rule reply). The
++// bytes come back inline from voice.tts and play straight from an object URL —
++// nothing is stored in the session log, so the card is pure presentation.
++
++import { useEffect, useRef, useState } from 'react'
++import type { ChatViewSlotProps } from '../contract/slots.ts'
++import css from './TtsVoiceCard.module.css'
++
++/** Decode a base64 payload into a browser Blob URL. */
++function audioUrlOf(mediaType: string, data: string): string {
++  const binary = atob(data)
++  const bytes = new Uint8Array(binary.length)
++  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
++  return URL.createObjectURL(new Blob([bytes.buffer], { type: mediaType }))
++}
++
++/** Synthesized voice reply pill: play/pause + estimated duration. */
++export function TtsVoiceCard({ mediaType, data, durationMs, t }: {
++  mediaType: string
++  data: string
++  durationMs?: number
++  t: ChatViewSlotProps['t']
++}) {
++  const [url] = useState(() => audioUrlOf(mediaType, data))
++  const [playing, setPlaying] = useState(false)
++  const audioRef = useRef<HTMLAudioElement | null>(null)
++  useEffect(() => () => { URL.revokeObjectURL(url) }, [url])
++  const toggle = (): void => {
++    const audio = audioRef.current
++    if (audio === null) return
++    if (playing) audio.pause()
++    else void audio.play().catch(() => { setPlaying(false) })
++  }
++  const seconds = durationMs === undefined ? null : Math.max(1, Math.ceil(durationMs / 1_000))
++  return (
++    <div className={css.card} data-tts-voice>
++      <button
++        type="button"
++        className={css.play}
++        aria-label={playing ? t('voice.pause') : t('voice.play')}
++        onClick={toggle}
++      >
++        {playing
++          ? (
++            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
++              <rect x="3.5" y="3.5" width="3" height="9" rx="1" fill="currentColor"/>
++              <rect x="9.5" y="3.5" width="3" height="9" rx="1" fill="currentColor"/>
++            </svg>
++          )
++          : (
++            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
++              <path d="M5 3.5L12.5 8L5 12.5V3.5Z" fill="currentColor"/>
++            </svg>
++          )}
++      </button>
++      <span className={css.duration}>{seconds === null ? '' : `${seconds}s`}</span>
++      <span className={css.label}>{t('voice.reply')}</span>
++      <audio
++        ref={audioRef}
++        src={url}
++        onPlay={() => { setPlaying(true) }}
++        onPause={() => { setPlaying(false) }}
++        onEnded={() => { setPlaying(false) }}
++      />
++    </div>
++  )
++}
+diff --git a/packages/client/ui-conversation/src/client/chat/VoiceReplyNodeView.tsx b/packages/client/ui-conversation/src/client/chat/VoiceReplyNodeView.tsx
+new file mode 100644
+index 0000000000..8fd17edbbe
+--- /dev/null
++++ b/packages/client/ui-conversation/src/client/chat/VoiceReplyNodeView.tsx
+@@ -0,0 +1,20 @@
++// VoiceReplyNodeView: the assistant's synthesized voice reply as its own
++// durable chat row — a standalone voice bar (play button + duration), mirroring
++// the user's voice messages instead of being buried inside the text reply.
++
++import { memo } from 'react'
++import type { ChatNodeViewProps } from '../contract/slots.ts'
++import { VoiceCard } from './MessageItem.tsx'
++import css from './MessageItem.module.css'
++
++/** Assistant voice-reply keyed Chat renderer: one standalone voice bar. */
++export const VoiceReplyNodeView = memo(function VoiceReplyNodeView({
++  node, loadVoice, t,
++}: ChatNodeViewProps<'voice-reply'>) {
++  const { voice } = node.data
++  return (
++    <div className={css.voiceReplyRow} data-voice-reply>
++      <VoiceCard attachment={voice} load={loadVoice} t={t} />
++    </div>
++  )
++})
+diff --git a/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts b/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts
+index ed311e4b74..ab63cde601 100644
+--- a/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts
++++ b/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts
+@@ -7,16 +7,31 @@ import {
+   TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
+ } from './MessageItem.tsx'
+ import { TurnTailNodeView } from './TurnTailNodeView.tsx'
++import { VoiceReplyNodeView } from './VoiceReplyNodeView.tsx'
+ 
+ /**
+  * Register this package's business renderers behind the keyed Chat Node seat.
+  * @param ctx - owning UI Conversation context.
+  */
+ export function registerChatNodeRenderers(ctx: Context): void {
+-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+-    { name: 'conversation.chat.node', key: 'user', locale: NS }, UserMessageNodeView))
+-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+-    { name: 'conversation.chat.node', key: 'steering', locale: NS }, UserMessageNodeView))
++  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
++    name: 'conversation.chat.node',
++    key: 'user',
++    locale: NS,
++    children: {
++      'conversation.chat.user-actions': { kind: 'list', scope: 'session' },
++      'conversation.chat.voice-actions': { kind: 'list', scope: 'session' },
++    },
++  }, UserMessageNodeView))
++  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
++    name: 'conversation.chat.node',
++    key: 'steering',
++    locale: NS,
++    children: {
++      'conversation.chat.user-actions': { kind: 'list', scope: 'session' },
++      'conversation.chat.voice-actions': { kind: 'list', scope: 'session' },
++    },
++  }, UserMessageNodeView))
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+     { name: 'conversation.chat.node', key: 'context', locale: NS }, ContextMessageNodeView))
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+@@ -46,6 +61,8 @@ export function registerChatNodeRenderers(ctx: Context): void {
+       'conversation.chat.assistant-actions': { kind: 'list', scope: 'session' },
+     },
+   }, TurnTailNodeView))
++  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
++    { name: 'conversation.chat.node', key: 'voice-reply', locale: NS }, VoiceReplyNodeView))
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+     { name: 'conversation.chat.node', key: 'unknown', locale: NS }, UnknownNodeView))
+ }
+diff --git a/packages/client/ui-conversation/src/client/contract/slots.ts b/packages/client/ui-conversation/src/client/contract/slots.ts
+index 4ea0c79402..a7a8e7b60f 100644
+--- a/packages/client/ui-conversation/src/client/contract/slots.ts
++++ b/packages/client/ui-conversation/src/client/contract/slots.ts
+@@ -11,7 +11,7 @@ import type {
+   TurnLocation, WorkspaceId,
+ } from '@deepseek-ai/dsh-client-runtime/client'
+ import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
+-import type { MessageId } from '@deepseek-ai/dsh-client-connection/client'
++import type { BalanceView, MessageId, PromptContentPart, VoiceAttachmentRef } from '@deepseek-ai/dsh-client-connection/client'
+ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+ import type { ComposerBlock } from '../input/blocks.ts'
+ import type {
+@@ -140,6 +140,32 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+       scope: 'session'
+       owner: AssistantActionOwnerProps
+     }
++    /**
++     * Action strip attached to one finalized user message, rendered inside
++     * that message's IconActions row. Mirror of the assistant-actions seat:
++     * user messages carry no messageId, so the owner addresses the message by
++     * its stable `seq` and hands the voice transcripts (the rendered
++     * transcript text lives only on `attachment.transcript`, not in any text
++     * block — contributors that copy a voice message need this directly).
++     * Entries render by ascending `order`.
++     */
++    'conversation.chat.user-actions': {
++      kind: 'list'
++      scope: 'session'
++      owner: UserActionOwnerProps
++    }
++    /**
++     * Actions rendered at the tail of one voice card (inside the card, after
++     * the transcript label), addressed by message `seq` + card `index` and
++     * handed the single card's transcript. This is where a "copy transcript"
++     * affordance belongs — inside the voice bar itself, not in the message
++     * action row. Entries render by ascending `order`.
++     */
++    'conversation.chat.voice-actions': {
++      kind: 'list'
++      scope: 'session'
++      owner: VoiceActionOwnerProps
++    }
+     /**
+      * The body of the details panel for the tool call the user selected —
+      * one occupant, so taking it means rendering every tool's output, not just
+@@ -380,6 +406,24 @@ export interface AssistantActionOwnerProps {
+   messageId: MessageId
+ }
+ 
++/** Owner currency of one finalized user message's action strip. */
++export interface UserActionOwnerProps {
++  /** User messages carry no messageId; `seq` is the stable message identity. */
++  seq: number
++  /** Non-empty voice transcripts on this message, in attachment order. */
++  voiceTranscripts: readonly string[]
++}
++
++/** Owner currency of one voice card's tail actions. */
++export interface VoiceActionOwnerProps {
++  /** Stable message identity of the containing user message. */
++  seq: number
++  /** Zero-based index of the voice card within the message. */
++  index: number
++  /** This card's transcript (may be empty when ASR produced none). */
++  transcript: string
++}
++
+ /** Hook constrained to business data published on the current Chat Node's Turn. */
+ export type UseChatNodeTurnData = <Key extends Extract<keyof ConversationTurnDataMap, string>>(
+   key: Key,
+@@ -403,6 +447,10 @@ export interface ChatNodeOwnerProps {
+   forkAt: (seq: number) => void
+   /** Render a historical image group through the attachment slot. */
+   renderMessageImages: RenderMessageImages
++  /** Resolve a session-authorized historical image for inline display. */
++  loadImage: (attachment: ImageAttachmentRef) => Promise<string>
++  /** Resolve a session-authorized historical voice object for inline playback. */
++  loadVoice: (attachment: VoiceAttachmentRef) => Promise<string>
+   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
+ }
+ 
+@@ -474,6 +522,8 @@ export interface ConversationSessionInjected {
+   }
+   /** Release historical image URLs when this rendered session scope unmounts. */
+   releaseSessionImages: (sessionId: SessionId) => void
++  /** Release historical voice URLs when this rendered session scope unmounts. */
++  releaseSessionVoices: (sessionId: SessionId) => void
+   /** Bind the input machine's draft persistence mirror to the session store. */
+   bindDraftMirror: (write: (text: string) => void) => () => void
+ }
+@@ -556,6 +606,35 @@ export interface ComposerBarInjected {
+    * Resolves admission: false = rejected/unmatched/transport failure.
+    */
+   command: ((line: string) => Promise<boolean>) | undefined
++  /**
++   * 查询 DeepSeek 直连账户余额（模型按钮旁的余额指示）；非直连/无 key
++   * 返回 null。absent 仅当没有 session（组件据此隐藏）。
++   */
++  readBalance: (() => Promise<{ balance: BalanceView | null }>) | undefined
++  /**
++   * 发送一条录音语音消息（host 落盘后自动 ASR 转文本，agent 按文本回复）；
++   * absent 仅当没有 session。
++   * Resolves admission: false = rejected/transport failure.
++   * @param mode - queue or steer delivery, resolved by composer policy so the
++   *   user's busy-state preference (设置里的"排队/插队") applies to voice too.
++   */
++  sendVoice: ((part: Extract<PromptContentPart, { type: 'voice' }>, mode: InputSubmitMode) => Promise<boolean>) | undefined
++  /**
++   * 即时转写一条录音（"说话转文本"手势：上滑右侧松手时调用，结果作为普通
++   * 文本消息发送，音频不落库）；absent 仅当没有 session。
++   * @returns recognized text, or null when recognition failed.
++   */
++  transcribeVoice: ((part: Extract<PromptContentPart, { type: 'voice' }>) => Promise<string | null>) | undefined
++  /**
++   * 合成一条语音回复（本地 TTS 引擎），返回可直接播放的音频数据；
++   * absent 仅当没有 session。用于"语音铁律"自动回复和手动语音按钮。
++   * @returns encoded audio, or null when synthesis failed.
++   */
++  synthesizeVoice: ((text: string, provider?: string) => Promise<{
++    mediaType: string
++    data: string
++    durationMs?: number
++  } | null>) | undefined
+   /**
+    * Registrant hooks compartment: the renderer binds these to
+    * useNotices/useLexicon (static absent sources without a session — hook
+@@ -736,6 +815,17 @@ export interface ChatViewInjected {
+   loadOlder: () => void
+   /** Resolve a session-authorized historical image for inline display. */
+   loadImage: (attachment: ImageAttachmentRef) => Promise<string>
++  /** Resolve a session-authorized historical voice object for inline playback. */
++  loadVoice: (attachment: VoiceAttachmentRef) => Promise<string>
++  /**
++   * 合成语音回复（本地 TTS；"语音铁律"：上一条用户消息是语音时，回复完成后
++   * 自动调用并播放）。返回可直接播放的音频数据；失败返回 null。
++   */
++  synthesizeVoice: ((text: string, provider?: string) => Promise<{
++    mediaType: string
++    data: string
++    durationMs?: number
++  } | null>) | undefined
+   /** Hand a call off to the trajectory view: write the one-shot inspect target and switch tabs. */
+   inspectCall: (callId: CallId) => void
+   /**
+diff --git a/packages/client/ui-conversation/src/client/conversation-nodes/register.ts b/packages/client/ui-conversation/src/client/conversation-nodes/register.ts
+index 5086253e81..79156231cc 100644
+--- a/packages/client/ui-conversation/src/client/conversation-nodes/register.ts
++++ b/packages/client/ui-conversation/src/client/conversation-nodes/register.ts
+@@ -11,6 +11,7 @@ import { registerToolConversationNode } from './tool.ts'
+ import { registerTurnErrorConversationNode } from './turn-error.ts'
+ import { registerTurnMaxTokensConversationNode } from './turn-max-tokens.ts'
+ import { registerTurnTailConversationNode } from './turn-tail.ts'
++import { registerVoiceReplyConversationNode } from './voice-reply.ts'
+ 
+ /**
+  * Register the Chat business Definitions and target builder contributed by this package.
+@@ -27,6 +28,7 @@ export function registerConversationNodes(ctx: Context): void {
+   registerTurnErrorConversationNode(ctx)
+   registerTurnMaxTokensConversationNode(ctx)
+   registerTurnTailConversationNode(ctx)
++  registerVoiceReplyConversationNode(ctx)
+   registerUnknownConversationFallback(ctx)
+   registerChatConversationView(ctx)
+ }
+diff --git a/packages/client/ui-conversation/src/client/conversation-nodes/voice-reply.ts b/packages/client/ui-conversation/src/client/conversation-nodes/voice-reply.ts
+new file mode 100644
+index 0000000000..e7312b797f
+--- /dev/null
++++ b/packages/client/ui-conversation/src/client/conversation-nodes/voice-reply.ts
+@@ -0,0 +1,79 @@
++import type { Context } from '@deepseek-ai/cordis'
++import type {
++  ConversationMatch, ConversationNodeDefinition,
++} from '@deepseek-ai/dsh-client-runtime/client'
++import type { VoiceAttachmentRef } from '@deepseek-ai/dsh-client-connection/client'
++import { chatNode } from './common.ts'
++
++/** One assistant voice-reply row's durable payload (from the voice/reply event). */
++export interface VoiceReplyChatData {
++  readonly turn: number
++  readonly seq: number
++  readonly time: number
++  readonly voice: VoiceAttachmentRef
++}
++
++declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
++  interface ChatNodeDataMap {
++    /** Assistant's synthesized voice reply, persisted beside the user's voice messages. */
++    'voice-reply': VoiceReplyChatData
++  }
++}
++
++interface VoiceReplyState {
++  readonly turn: number
++  readonly seq: number
++  readonly time: number
++  readonly voice: VoiceAttachmentRef
++}
++
++function stateFrom(match: ConversationMatch): VoiceReplyState | undefined {
++  if (match.event.type !== 'voice/reply') return undefined
++  const { turn, voiceId, mediaType, bytes, durationMs, transcript } = match.event.data
++  return {
++    turn,
++    seq: match.event.seq,
++    time: match.event.time,
++    voice: {
++      voiceId,
++      mediaType: mediaType as VoiceAttachmentRef['mediaType'],
++      bytes,
++      ...(durationMs === undefined ? {} : { durationMs }),
++      // [本地改造 2026-08-21] AI 语音回复的转写文本（合成的正文），供语音条显示与复制
++      ...(typeof transcript === 'string' && transcript !== '' ? { transcript } : {}),
++    },
++  }
++}
++
++/** [本地改造 2026-08-16] 助手语音回复独立横条：跟随 voice/reply 事件渲染，
++ * 与用户语音消息同级持久化（可回放、可翻查），不混在文字回复里。
++ * 同一 turn 可有多条语音回复（自动回复 + 主动发送），match id 用事件 seq
++ * 保证每条唯一，避免 assembler "more than one start Match" 崩溃。 */
++export const voiceReplyDefinition: ConversationNodeDefinition<VoiceReplyState> = {
++  kind: 'voice-reply',
++  target: 'chat',
++  match: (event) => {
++    if (event.type === 'voice/reply') return { id: String(event.seq), role: 'start' }
++    return null
++  },
++  start: (_context, match) => {
++    const state = stateFrom(match)
++    if (state === undefined) throw new Error('voice-reply start requires a voice/reply event')
++    return state
++  },
++  update: context => context.state,
++  buildViewNode: (context) => {
++    const state = context.state
++    if (state === undefined) return null
++    const data: VoiceReplyChatData = { turn: state.turn, seq: state.seq, time: state.time, voice: state.voice }
++    return chatNode(context, 'voice-reply', state.seq, data)
++  },
++}
++
++/**
++ * Register the assistant voice-reply contribution.
++ * @param ctx - owning UI Conversation context.
++ */
++export function registerVoiceReplyConversationNode(ctx: Context): void {
++  ctx.conversationEvents.register(voiceReplyDefinition)
++}
+diff --git a/packages/client/ui-conversation/src/client/index.ts b/packages/client/ui-conversation/src/client/index.ts
+index 814734411b..5d8e0082b3 100644
+--- a/packages/client/ui-conversation/src/client/index.ts
++++ b/packages/client/ui-conversation/src/client/index.ts
+@@ -13,6 +13,7 @@ export type {} from './conversation-nodes/tool.ts'
+ export type {} from './conversation-nodes/turn-error.ts'
+ export type {} from './conversation-nodes/turn-max-tokens.ts'
+ export type {} from './conversation-nodes/turn-tail.ts'
++export type {} from './conversation-nodes/voice-reply.ts'
+ 
+ export { apply, inject } from './apply.ts'
+ export { ConversationController } from './service.ts'
+diff --git a/packages/client/ui-conversation/src/client/locales.ts b/packages/client/ui-conversation/src/client/locales.ts
+index f4e7a7c59a..8e7f378d52 100644
+--- a/packages/client/ui-conversation/src/client/locales.ts
++++ b/packages/client/ui-conversation/src/client/locales.ts
+@@ -50,6 +50,26 @@ export const zh = {
+   'image.modelUnsupported': '当前模型不支持图片，请切换支持图片的模型',
+   'image.subagentUnsupported': '子智能体会话暂不支持图片',
+   'image.sendFailed': '图片发送失败（{reason}），请重新添加图片后再试',
++  'voice.start': '点击开始录音，再点停止发送',
++  'voice.releaseToSend': '松手发送 · 上滑取消 / 转文字',
++  'voice.gestureSend': '松手发送',
++  'voice.gestureCancel': '松手取消',
++  'voice.gestureText': '松手转文字',
++  'voice.recognizing': '语音识别中…',
++  'voice.recognitionFailed': '语音转文字失败，请重试',
++  'voice.stopAndSend': '停止并发送语音',
++  'voice.cancel': '取消录音',
++  'voice.unsupportedFormat': '当前浏览器录音格式不支持，请更换浏览器',
++  'voice.sendFailed': '语音发送失败，请重试',
++  'voice.empty': '未录到声音，请重试',
++  'voice.micUnavailable': '无法访问麦克风，请检查权限设置',
++  'voice.play': '播放语音',
++  'voice.pause': '暂停播放',
++  'voice.transcriptLabel': '语音识别文本',
++  'voice.asrFailed': '未能识别（ASR 未配置或识别失败）',
++  'voice.loadFailed': '语音加载失败',
++  'voice.synthesizing': '正在合成语音回复…',
++  'voice.reply': '语音回复',
+   'context.aria': '上下文已用 {percent}',
+   'context.used': '上下文已用',
+   'context.system': '系统提示词',
+@@ -227,6 +247,26 @@ export const en = {
+   'image.modelUnsupported': 'The current model does not support images; switch to a model that does',
+   'image.subagentUnsupported': 'Subagent sessions do not support images yet',
+   'image.sendFailed': 'Sending images failed ({reason}); re-add them and try again',
++  'voice.start': 'Click to record; click again to send',
++  'voice.releaseToSend': 'Release to send · slide up to cancel / as text',
++  'voice.gestureSend': 'Release to send',
++  'voice.gestureCancel': 'Release to cancel',
++  'voice.gestureText': 'Release as text',
++  'voice.recognizing': 'Recognizing speech…',
++  'voice.recognitionFailed': 'Speech-to-text failed; try again',
++  'voice.stopAndSend': 'Stop and send voice',
++  'voice.cancel': 'Cancel recording',
++  'voice.unsupportedFormat': 'This browser cannot record supported audio; try another browser',
++  'voice.sendFailed': 'Failed to send voice; try again',
++  'voice.empty': 'No audio captured; try again',
++  'voice.micUnavailable': 'Microphone unavailable; check your permissions',
++  'voice.play': 'Play voice',
++  'voice.pause': 'Pause playback',
++  'voice.transcriptLabel': 'Voice transcript',
++  'voice.asrFailed': 'Recognition failed (ASR not configured or errored)',
++  'voice.loadFailed': 'Failed to load voice',
++  'voice.synthesizing': 'Synthesizing voice reply…',
++  'voice.reply': 'Voice reply',
+   'context.aria': '{percent} of context used',
+   'context.used': 'of context used',
+   'context.system': 'System prompt',
+diff --git a/packages/client/ui-conversation/src/client/service.ts b/packages/client/ui-conversation/src/client/service.ts
+index a37816472c..eb8b4dffe1 100644
+--- a/packages/client/ui-conversation/src/client/service.ts
++++ b/packages/client/ui-conversation/src/client/service.ts
+@@ -15,6 +15,7 @@ import type { Context } from '@deepseek-ai/cordis'
+ import type { ISessions, SessionFace, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+ import type { SubmitImageAttachment, SubmitOutcome } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+ import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
++import type { VoiceAttachmentRef } from '@deepseek-ai/dsh-api-remotes/client'
+ import type { ComposerAttachment } from './contract/slots.ts'
+ import type { QueueAction, QueueItemId } from './contract/queue.ts'
+ import type { ComposerBlocks } from './input/blocks.ts'
+@@ -75,6 +76,12 @@ interface ImageUrlEntry {
+   readonly pending: Promise<string>
+ }
+ 
++interface VoiceUrlEntry {
++  readonly sessionId: SessionId
++  readonly generation: number
++  readonly pending: Promise<string>
++}
++
+ /** Unsupported browser-declared image type, localized by the UI boundary. */
+ export class UnsupportedImageMediaTypeError extends Error {
+   /** Browser-declared MIME value, possibly empty. */
+@@ -98,6 +105,9 @@ export class ConversationController extends Service implements IConversation {
+   private readonly imageUrls = new Map<string, ImageUrlEntry>()
+   private readonly imageGenerations = new Map<SessionId, number>()
+   private readonly createdImageUrls = new Set<string>()
++  private readonly voiceUrls = new Map<string, VoiceUrlEntry>()
++  private readonly voiceGenerations = new Map<SessionId, number>()
++  private readonly createdVoiceUrls = new Set<string>()
+   private disposed = false
+ 
+   /**
+@@ -115,9 +125,13 @@ export class ConversationController extends Service implements IConversation {
+       this.disposed = true
+       for (const url of this.createdImageUrls) revokePreview(url)
+       this.createdImageUrls.clear()
++      for (const url of this.createdVoiceUrls) revokePreview(url)
++      this.createdVoiceUrls.clear()
+       this.draftAttachments.clear()
+       this.imageUrls.clear()
+       this.imageGenerations.clear()
++      this.voiceUrls.clear()
++      this.voiceGenerations.clear()
+     }, 'conversation attachment URL cache')
+   }
+ 
+@@ -282,6 +296,63 @@ export class ConversationController extends Service implements IConversation {
+     }
+   }
+ 
++  /**
++   * Resolve and cache one session-authorized historical voice URL.
++   * @param sessionId - owning session authorization scope.
++   * @param attachment - durable voice reference.
++   * @returns browser URL valid until its rendered session is released.
++   */
++  resolveVoice(sessionId: SessionId, attachment: VoiceAttachmentRef): Promise<string> {
++    if (this.disposed) return Promise.reject(new Error('conversation.resolveVoice: service is disposed'))
++    const key = `${sessionId}:${attachment.voiceId}`
++    const cached = this.voiceUrls.get(key)
++    if (cached !== undefined) return cached.pending
++    const generation = this.voiceGenerations.get(sessionId) ?? 0
++    const session = this.requireSessions().binding(sessionId)?.session
++    if (session === undefined) {
++      return Promise.reject(new Error(`conversation.resolveVoice: unknown session "${sessionId}"`))
++    }
++    const pending = session.readVoice(attachment.voiceId)
++      .then((result) => {
++        if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
++        if (this.disposed) throw new Error('conversation.resolveVoice: service was disposed before loading completed')
++        if ((this.voiceGenerations.get(sessionId) ?? 0) !== generation) {
++          throw new Error('historical voice scope was released before loading completed')
++        }
++        if (typeof URL.createObjectURL !== 'function') {
++          return `data:${result.value.attachment.mediaType};base64,${bytesToBase64(result.value.data)}`
++        }
++        const bytes = Uint8Array.from(result.value.data)
++        const url = URL.createObjectURL(new Blob([bytes.buffer], { type: result.value.attachment.mediaType }))
++        this.createdVoiceUrls.add(url)
++        return url
++      })
++      .catch((error: unknown) => {
++        if (this.voiceUrls.get(key)?.generation === generation) this.voiceUrls.delete(key)
++        throw error
++      })
++    this.voiceUrls.set(key, { sessionId, generation, pending })
++    return pending
++  }
++
++  /**
++   * Release every historical voice URL owned by one rendered session.
++   * @param sessionId - rendered session scope.
++   */
++  releaseSessionVoices(sessionId: SessionId): void {
++    this.voiceGenerations.set(sessionId, (this.voiceGenerations.get(sessionId) ?? 0) + 1)
++    for (const [key, entry] of this.voiceUrls) {
++      if (entry.sessionId !== sessionId) continue
++      this.voiceUrls.delete(key)
++      void entry.pending.then((url) => {
++        if (!this.createdVoiceUrls.delete(url)) return
++        revokePreview(url)
++      }, () => {
++        // A failed or invalidated load owns no object URL.
++      })
++    }
++  }
++
+   /** Apply one operation to a pending queue occurrence. */
+   async updateQueue(itemId: QueueItemId, action: QueueAction): Promise<void> {
+     const session = this.scopedSession('updateQueue')
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationSession.tsx b/packages/client/ui-conversation/src/client/skeleton/ConversationSession.tsx
+index d576aa175d..e7e9b5d503 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ConversationSession.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/ConversationSession.tsx
+@@ -137,7 +137,7 @@ export function ConversationSessionHeader({
+  */
+ export function ConversationSession({
+   sessionId, useSession, useInput, inputActions, useStore, actions,
+-  renderSlot, views, bindDraftMirror, releaseSessionImages,
++  renderSlot, views, bindDraftMirror, releaseSessionImages, releaseSessionVoices,
+ }: ConversationSessionProps) {
+   useSyncExternalStore(views.subscribe, views.version)
+   const tabs = views.list()
+@@ -160,7 +160,15 @@ export function ConversationSession({
+ 
+   useEffect(() => () => {
+     releaseSessionImages(sessionId)
+-  }, [releaseSessionImages, sessionId])
++    releaseSessionVoices(sessionId)
++    // [本地修复 2026-08-16] 依赖只保留 sessionId：inject 的
++    // releaseSessionImages/releaseSessionVoices 每次渲染都是新函数引用，
++    // 若列入依赖，每次渲染都会先执行本 cleanup → voice/image generation
++    // 持续递增 → 加载中的 resolveVoice/resolveImage 被
++    // "historical voice scope was released" 拒绝 → 语音回复按钮变灰。
++    // 只在切会话/卸载时释放一次即可，与 effect 语义一致。
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [sessionId])
+ 
+   if (blank && composerPhase === 'blank') return null
+   return (
+diff --git a/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css b/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css
+index e5b85df3e9..1a5b45deac 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css
++++ b/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css
+@@ -270,7 +270,9 @@
+   flex-wrap: wrap;
+   align-items: center;
+   justify-content: space-between;
+-  gap: 12px;
++  /* [本地改造 2026-08-16] 竖屏/窄宽时允许换行：工具按钮与右侧控制不会被挤折叠 */
++  flex-wrap: wrap;
++  gap: 6px 12px;
+   /* 2px moved from the bottom pad to the top: the whole control row sits 2px
+      lower in the card (it read too high against the textarea) while the card
+      height and the controls' own centering stay untouched. */
+@@ -302,15 +304,13 @@
+   gap: 12px;
+ }
+ 
++/* [本地改造 2026-08-16] trailing 间距收窄（模型/余额/上下文挤在一起，省垂直空间）；
++   窄宽时可换行，避免竖屏折叠。 */
+ .trailing {
+-  flex: none;
+-  /* Wrap keeps the left mode chips and the right controls apart when the card
+-     runs out of row width: the trailing group (model + send) moves to its own
+-     line instead of the left group shrinking until its chip overlaps the
+-     model trigger (external:107). The auto margin re-anchors it right on the
+-     wrapped line; on a single line space-between already pins it right. */
+-  margin-left: auto;
+-  gap: 12px;
++  flex: 1 1 auto;
++  justify-content: flex-end;
++  flex-wrap: wrap;
++  gap: 6px;
+ }
+ 
+ /* Attach circle (figma + control): 28px, selector fill, primary glyph. */
+@@ -336,6 +336,67 @@
+   cursor: default;
+ }
+ 
++/* [本地改造 2026-08-16] 语音录音中：麦克风按钮换成红点计时（飞书/微信式状态）。 */
++.voiceRecording {
++  color: var(--dsw-alias-state-error-primary);
++}
++
++.voiceRecording:not(:disabled) {
++  background: var(--dsw-alias-interactive-bg-hover-danger);
++}
++
++.voiceTimer {
++  display: inline-flex;
++  align-items: center;
++  gap: 5px;
++  font-size: 12px;
++  line-height: 1;
++  font-variant-numeric: tabular-nums;
++}
++
++.voiceDot {
++  width: 7px;
++  height: 7px;
++  border-radius: 999px;
++  background: currentColor;
++  animation: dsh-voice-pulse 1.2s ease-in-out infinite;
++}
++
++@keyframes dsh-voice-pulse {
++  0%, 100% { opacity: 1; }
++  50% { opacity: 0.35; }
++}
++
++@media (prefers-reduced-motion: reduce) {
++  .voiceDot {
++    animation: none;
++  }
++}
++
++/* [本地改造 2026-08-16] 录音手势浮层：按住说话时提示当前松手动作。 */
++.voiceHint {
++  display: inline-flex;
++  align-items: center;
++  height: 28px;
++  padding: 0 10px;
++  border-radius: 8px;
++  background: var(--dsw-alias-interactive-bg-hover-solid);
++  color: var(--dsw-alias-label-secondary);
++  font-size: 12px;
++  line-height: 1;
++  white-space: nowrap;
++}
++
++.voiceHint[data-gesture='cancel'] {
++  color: var(--dsw-alias-state-error-primary);
++  background: var(--dsw-alias-interactive-bg-hover-danger);
++}
++
++.voiceHint[data-gesture='text'] {
++  color: var(--dsw-alias-label-primary);
++  background: var(--dsw-alias-interactive-bg-hover-solid);
++}
++
+ /* Plan / Read-only / model — native <select>, chip-like closed chrome
+    (figma ToggleButton: 13/20 medium secondary, 12px chevron). */
+ .select {
+diff --git a/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx b/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
+index 14feaca291..29c44da070 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
+@@ -12,21 +12,18 @@ import clsx from 'clsx'
+ import {
+   IconPlusOutline16, IconWarningOutline16, Toast, Tooltip,
+ } from '@deepseek-ai/dsh-client-ui-primitives'
+-// Type-only: the `plan` projection key merge (the TodoDock posture — the
+-// composer reads a host-computed value; the domain owns the key).
++import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
++import type { Translate } from '@deepseek-ai/dsh-client-locale/client'
++// Type-only: pulls the `plan` SessionProjectionMap merge so useProjection('plan') type-checks.
+ import type {} from '@deepseek-ai/dsh-plan-mode/client'
+-// Type-only: the `goal` projection key merge (hint disambiguation).
+-import type {} from '@deepseek-ai/dsh-goal/client'
+-// The `imageLimits` projection key merge (intake pre-check) arrives with the
+-// wire types: apiproxy's sessions contract declares it, and client-runtime's
+-// api-remotes import already places it in every client program.
+-import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
+ import type { ComposerBarProps } from '../contract/slots.ts'
+ import { deriveDecorations } from '../input/decorations.ts'
+ import type { DraftDecorations } from '../input/decorations.ts'
+ import { attachmentErrorText, imageSizeText } from '../image-labels.ts'
+ import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
+ import { ContextMeter } from './ContextMeter.tsx'
++/* [本地改造 2026-08-20] 余额/图片/语音按钮全部迁移至插件 @oadank/dsh-client-composer；
++   源码 InputBar 不再持有图片/语音 UI，余额挂 conversation.input.right（插件）。 */
+ import { PermissionSelect } from './PermissionSelect.tsx'
+ import { isSafariBrowser, repairSafariTextareaLayout } from './safari.ts'
+ import css from './InputBar.module.css'
+@@ -201,25 +198,27 @@ export function InputBar({
+   const revealSelectionFocus = (el: HTMLTextAreaElement): void => {
+     // selectionStart/End are number|null in lib.dom; the type-aware lint program narrows them.
+     const caret = el.selectionDirection === 'backward' ? el.selectionStart : el.selectionEnd
+-    // oxlint-disable-next-line typescript/no-unnecessary-condition
+     revealCaret(caret ?? el.value.length)
+   }
+ 
+-  // Unlock (mount / session switch) returns focus to the box, and owns the
+-  // reveal that comes with it. `preventScroll` because this focus is ours, not
+-  // a gesture: the textarea is as tall as the draft, so the browser's reveal
+-  // would walk up to the conversation scrollport and move the transcript under
+-  // a user who only switched session. That leaves the caret to us — the DOM is
+-  // reused across sessions, so switching to a longer draft keeps the previous
+-  // offset while the value swap puts the caret at the new draft's end, which is
+-  // off screen (measured on all three engines: offset 0 with the caret 940px
+-  // down). Suppress the walk, then reveal in our own box.
++  // [本地改造 2026-08-16] 彻底取消"切会话/挂载自动聚焦"：移动端/触屏切会话
++  // 会弹输入法。聚焦只在"同一会话内解锁边沿"（locked true→false，运行结束
++  // 或从禁用态恢复）触发；sessionId 变化（切会话）或首次挂载都不抢焦点。
++  const lastLockedRef = useRef<boolean>(locked)
++  const lastFocusSessionRef = useRef<SessionId | undefined>(sessionId)
+   useEffect(() => {
+     const el = inputRef.current
+-    if (locked || el === null) return
++    const wasLocked = lastLockedRef.current
++    lastLockedRef.current = locked
++    if (el === null) return
++    if (locked || !wasLocked) return
++    if (lastFocusSessionRef.current !== sessionId) return
+     el.focus({ preventScroll: true })
+     revealSelectionFocus(el)
+   }, [locked, sessionId])
++  useEffect(() => {
++    lastFocusSessionRef.current = sessionId
++  }, [sessionId])
+ 
+   // A persisted draft arrives AFTER the unlock effect: ConversationSession
+   // adopts it in its own mount effect, and a parent's mount effect runs after
+@@ -270,12 +269,10 @@ export function InputBar({
+   }, [])
+ 
+   // selectionStart/End are number|null in lib.dom; the type-aware lint program narrows them.
+-  /* oxlint-disable typescript/no-unnecessary-condition */
+   const selectionOf = (el: HTMLTextAreaElement) => ({
+     start: el.selectionStart ?? 0,
+     end: el.selectionEnd ?? el.selectionStart ?? 0,
+   })
+-  /* oxlint-enable typescript/no-unnecessary-condition */
+ 
+   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+     if (workspaceTrigger) {
+@@ -292,7 +289,6 @@ export function InputBar({
+     // IME guard so a composition-closing Shift+Enter still breaks the line.
+     if (e.key === 'Enter' && e.shiftKey) return
+     // keyCode 229 is the legacy IME-composition signal engines emit without isComposing.
+-    // oxlint-disable-next-line typescript/no-deprecated
+     const composing = composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229
+     if (!composing && !machineBusy && !locked
+       && (e.key === 'Backspace' || e.key === 'Delete')) {
+@@ -374,7 +370,6 @@ export function InputBar({
+     safariNativeShrinkRef.current = safari && next.length < draft.length
+     keyboard.setDraft(next)
+     // selectionStart is number|null in lib.dom; the type-aware lint program narrows it.
+-    // oxlint-disable-next-line typescript/no-unnecessary-condition
+     keyboard.track(next, e.target.selectionStart ?? next.length)
+   }
+ 
+@@ -463,7 +458,6 @@ export function InputBar({
+     })()
+     if (rejected !== null) showToast(rejected)
+   }, [addImages, attachments, imageLimits, showToast, t])
+-
+   const canAcceptDrop = !locked && !machineBusy && addImages !== undefined
+ 
+   const onSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>): void => {
+@@ -482,6 +476,13 @@ export function InputBar({
+     inputRef.current?.focus({ preventScroll: true })
+   }
+ 
++  // [本地改造 2026-08-16] 语音按钮/取消按钮：按下时**释放**文本输入框焦点
++  // （blur），移动端点语音不会弹输入法；`preventScroll` 同理保持滚动位置。
++  const releaseFocus = (e: MouseEvent<HTMLButtonElement>): void => {
++    e.preventDefault()
++    inputRef.current?.blur()
++  }
++
+   const onToggleCommandMenu = (): void => {
+     const el = inputRef.current
+     if (el !== null) toggleCommandMenu?.(selectionOf(el))
+@@ -694,25 +695,27 @@ export function InputBar({
+         </div>
+         <div className={css.row}>
+           <div className={css.tools}>
+-            <Tooltip label={t('input.commands')} side="top" delayMs={500}>
+-              <button
+-                type="button"
+-                className={css.add}
+-                aria-label={t('input.commands')}
+-                aria-haspopup="listbox"
+-                aria-expanded={commandMenuOpen}
+-                disabled={locked || toggleCommandMenu === undefined}
+-                onMouseDown={keepFocus}
+-                onClick={onToggleCommandMenu}
+-              >
+-                <IconPlusOutline16 size={14} />
+-              </button>
+-            </Tooltip>
++            {/* [本地改造 2026-08-20] 余额/图片/语音按钮全部由插件 @oadank/dsh-client-composer 通过
++                conversation.input.left 提供；插件图片按钮调官方 onAddImages（=intakeImages），
++                图片走官方 draft 链路随文本发送。用户要求按钮顺序：[🖼][🎙][+]——
++                插件按钮在最左（命令 + 按钮之前），+ 命令按钮在右。 */}
++            {leftItems}
++            <button
++              type="button"
++              className={css.add}
++              aria-label={t('input.commands')}
++              aria-haspopup="listbox"
++              aria-expanded={commandMenuOpen}
++              disabled={locked || toggleCommandMenu === undefined}
++              onMouseDown={releaseFocus}
++              onClick={onToggleCommandMenu}
++            >
++              <IconPlusOutline16 size={14} />
++            </button>
+             <div className={css.modes}>
+               {accessSelect}
+               {renderSlot('conversation.input.plan', { locked })}
+             </div>
+-            {leftItems}
+           </div>
+           <div className={css.trailing}>
+             {rightItems}
+@@ -725,7 +728,7 @@ export function InputBar({
+                   className={css.primary}
+                   aria-label={t('input.stop')}
+                   disabled={stop === undefined}
+-                  onMouseDown={keepFocus}
++                  onMouseDown={releaseFocus}
+                   onClick={stop}
+                 >
+                   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+diff --git a/packages/core/session/src/known-event-types.ts b/packages/core/session/src/known-event-types.ts
+index 098743dd8a..ad82a01de7 100644
+--- a/packages/core/session/src/known-event-types.ts
++++ b/packages/core/session/src/known-event-types.ts
+@@ -64,5 +64,6 @@ export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
+   'turn/end',
+   'turn/start',
+   'user/message',
++  'voice/reply',
+   'web/deepseek-search-llm-request',
+ ])
+diff --git a/packages/core/session/src/types.ts b/packages/core/session/src/types.ts
+index 31ce28a01b..7f33eb2fb9 100644
+--- a/packages/core/session/src/types.ts
++++ b/packages/core/session/src/types.ts
+@@ -334,6 +334,25 @@ export interface SessionEventMap {
+    * so tolerating concurrent writers needs a signal beyond the log.
+    */
+   'session/end-seed': Record<string, never>
++  /**
++   * [本地改造 2026-08-16] 助手侧语音回复：turn 完成后 host 把最后一条助手文本
++   * 合成 TTS 并落盘，作为一条独立持久语音消息（与用户语音消息同级）。前端
++   * 渲染为单独语音横条（复用 VoiceCard）。log-only：不进入模型历史重建。
++   */
++  'voice/reply': {
++    /** The turn whose closing assistant text this reply speaks. */
++    turn: number
++    /** Opaque storage identifier of the synthesized audio object. */
++    voiceId: string
++    /** Audio container format of the stored object. */
++    mediaType: string
++    /** Exact encoded byte length. */
++    bytes: number
++    /** Recorder-style duration in milliseconds. */
++    durationMs?: number
++    /** [本地改造 2026-08-21] 合成的正文（转写文本），供语音条显示与复制。 */
++    transcript?: string
++  }
+ }
+ 
+ /** The appendable event-type keys of {@link SessionEventMap}, plugin-merged extensions included. */
+diff --git a/packages/host/apiproxy/package.json b/packages/host/apiproxy/package.json
+index fba04c4759..6de5aaaa52 100644
+--- a/packages/host/apiproxy/package.json
++++ b/packages/host/apiproxy/package.json
+@@ -45,15 +45,16 @@
+   ],
+   "license": "MIT",
+   "dependencies": {
+-    "@deepseek-ai/dsh-attachment": "workspace:^",
+     "@deepseek-ai/dsh-agent": "workspace:^",
+     "@deepseek-ai/dsh-agent-default-model": "workspace:^",
+     "@deepseek-ai/dsh-api-remotes": "workspace:^",
++    "@deepseek-ai/dsh-attachment": "workspace:^",
+     "@deepseek-ai/dsh-brand": "workspace:^",
+     "@deepseek-ai/dsh-commands": "workspace:^",
+     "@deepseek-ai/dsh-credentials": "workspace:^",
+     "@deepseek-ai/dsh-goal": "workspace:^",
+     "@deepseek-ai/dsh-host-directory-picker": "workspace:^",
++    "@deepseek-ai/dsh-jobs": "workspace:^",
+     "@deepseek-ai/dsh-llm": "workspace:^",
+     "@deepseek-ai/dsh-native-command": "workspace:^",
+     "@deepseek-ai/dsh-session": "workspace:^",
+@@ -65,13 +66,13 @@
+     "@deepseek-ai/dsh-settings": "workspace:^",
+     "@deepseek-ai/dsh-skill": "workspace:^",
+     "@deepseek-ai/dsh-subagent": "workspace:^",
+-    "@deepseek-ai/dsh-jobs": "workspace:^",
+     "@deepseek-ai/dsh-tools": "workspace:^",
+     "@deepseek-ai/dsh-user-approval": "workspace:^",
+     "@deepseek-ai/dsh-user-questions": "workspace:^",
+     "@deepseek-ai/dsh-workspace": "workspace:^",
+     "@deepseek-ai/schemastery": "workspace:^",
+     "fflate": "^0.8.2",
++    "ws": "^8.21.0",
+     "zod": "^4.4.3"
+   },
+   "peerDependencies": {
+@@ -89,6 +90,6 @@
+     "@deepseek-ai/dsh-storage-domain": "workspace:^",
+     "@deepseek-ai/dsh-typert-protocol": "workspace:^",
+     "@deepseek-ai/dsh-typert-registry": "workspace:^",
+-    "@deepseek-ai/cordis": "workspace:^"
++    "@types/ws": "^8.18.1"
+   }
+ }
+diff --git a/packages/host/apiproxy/src/api-proxy.ts b/packages/host/apiproxy/src/api-proxy.ts
+index ccb2d6d20c..aa6d647c1d 100644
+--- a/packages/host/apiproxy/src/api-proxy.ts
++++ b/packages/host/apiproxy/src/api-proxy.ts
+@@ -4,16 +4,16 @@
+  */
+ 
+ import { randomUUID } from 'node:crypto'
+-import { mkdir, stat } from 'node:fs/promises'
++import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
+ import { homedir } from 'node:os'
+-import { dirname } from 'node:path'
++import { dirname, join } from 'node:path'
+ import type { Context } from '@deepseek-ai/cordis'
+ import { installModelSelection } from '@deepseek-ai/dsh-agent'
+ import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
+ import type {} from '@deepseek-ai/dsh-agent-presets/types'
+-import { AttachmentError, admitEncodedImages } from '@deepseek-ai/dsh-attachment'
++import { AttachmentError } from '@deepseek-ai/dsh-attachment'
+ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+-import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
++import { createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+ import { errorChain } from '@deepseek-ai/dsh-llm'
+ import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
+ import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
+@@ -36,7 +36,7 @@ import {
+ import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
+ import type {} from '@deepseek-ai/dsh-tools'
+ import type {
+-  ApiProxy, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
++  ApiProxy, BalanceView, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
+   ModelCatalogFailure, ModelProviderGroup,
+   ModelReasoning, MuxFrame, PromptContentPart, QuestionResponsePayload, SessionListMetadata, SessionProjectionsBlock, SessionSearchItem,
+   QueuedInboxItem, SessionSummary, SettingsNamespaceView, SubagentAddress, JobView, ToolEventView,
+@@ -51,6 +51,8 @@ import {
+   type SessionLogExportReady,
+   type SessionLogCompressionLevel,
+ } from './session-export.ts'
++import { readVoiceFile, saveVoiceFile, synthesizeReplyVoice, transcribeVoice, voiceObjectPath, voiceStorageRoot } from './voice.ts'
++import type { VoiceAttachmentRef } from './api/sessions.ts'
+ import type { SessionRawArtifact } from '@deepseek-ai/dsh-session-persistence'
+ import {
+   SESSION_SEARCH_RESULT_LIMIT,
+@@ -124,19 +126,150 @@ export const DEFAULT_COLD_BLANK_PROBE_MAX_BYTES = 1024
+ /** Conversation message event types (the pagination counting unit). */
+ const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
+ 
++/** Decode the browser payload while rejecting non-canonical base64 forms. */
++function decodeBase64(data: string): Uint8Array {
++  const decoded = Buffer.from(data, 'base64')
++  if (data.length === 0 || decoded.toString('base64') !== data) {
++    throw new AttachmentError('Image upload is not canonical base64.', 'INVALID_IMAGE_BASE64')
++  }
++  return new Uint8Array(decoded)
++}
++
++/** DeepSeek 直连余额缓存（5 秒过期：balance 接口很轻，实时性优先，仅防抖重复轮询）。 */
++let deepseekBalanceCache: { value: BalanceView | null; cachedAt: number } | null = null
++
++/**
++ * 查询 DeepSeek 直连账户余额。读取 DEEPSEEK_API_KEY 凭证（dsh-web 直连
++ * deepseek 路由的 key），调官方 GET /user/balance；无凭证、非直连部署或
++ * 查询失败一律返回 null（余额只是辅助指示，绝不让 UI 报错）。
++ * @param ctx - host context（读 credentials 可选服务）。
++ * @returns 余额视图；不可用时为 null。
++ */
++async function readDeepSeekBalance(ctx: Context): Promise<BalanceView | null> {
++  const now = Date.now()
++  if (deepseekBalanceCache !== null && now - deepseekBalanceCache.cachedAt < 5_000) {
++    return deepseekBalanceCache.value
++  }
++  let apiKey: string | undefined
++  const credentials = ctx.get('credentials')
++  if (credentials !== undefined) {
++    const hit = await credentials.resolve(credentialRef('DEEPSEEK_API_KEY'))
++    apiKey = hit?.value
++  } else {
++    apiKey = process.env.DEEPSEEK_API_KEY
++  }
++  if (apiKey === undefined || apiKey.length === 0) {
++    deepseekBalanceCache = { value: null, cachedAt: now }
++    return null
++  }
++  try {
++    const response = await fetch('https://api.deepseek.com/user/balance', {
++      headers: { authorization: `Bearer ${apiKey}` },
++      signal: AbortSignal.timeout(5000),
++    })
++    if (!response.ok) {
++      deepseekBalanceCache = { value: null, cachedAt: now }
++      return null
++    }
++    const data = await response.json() as {
++      balance_infos?: Array<{ currency: string; total_balance: string; granted_balance: string; topped_up_balance: string }>
++    }
++    const info = data.balance_infos?.[0]
++    if (info === undefined) {
++      deepseekBalanceCache = { value: null, cachedAt: now }
++      return null
++    }
++    const value: BalanceView = {
++      currency: info.currency,
++      total: info.total_balance,
++      granted: info.granted_balance,
++      toppedUp: info.topped_up_balance,
++    }
++    deepseekBalanceCache = { value, cachedAt: now }
++    return value
++  } catch {
++    // 网络抖动/超时：保留旧缓存值（若有），否则 null——绝不把失败抛给 UI。
++    return deepseekBalanceCache?.value ?? null
++  }
++}
++
+ /** Validate one prompt as a batch before publishing any durable image object. */
+ async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
+   if (content.every(part => part.type === 'text')) {
+     return content.map(part => ({ type: 'text', text: part.text }))
+   }
+-  const refs = await admitEncodedImages(ctx.attachments, content.filter(part => part.type === 'image'))
+-  let next = 0
+-  return content.map(part => part.type === 'text'
+-    ? { type: 'text', text: part.text }
+-    // admitEncodedImages returns one reference per image part in order.
+-    : { type: 'image', attachment: refs[next++] as ImageAttachmentRef })
++  const limits = ctx.attachments.imageLimits
++  if (content.filter(part => part.type === 'image').length > limits.maxImagesPerMessage) {
++    throw new AttachmentError('Prompt exceeds the configured image-count limit.', 'TOO_MANY_IMAGES')
++  }
++  const prepared = content.map(part => part.type === 'text'
++    ? part
++    : { part, data: decodeBase64(part.data) })
++  const images = prepared.filter((item): item is { part: Extract<PromptContentPart, { type: 'image' }>; data: Uint8Array } =>
++    'part' in item && item.part.type === 'image')
++  const totalBytes = images.reduce((sum, image) => sum + image.data.byteLength, 0)
++  if (totalBytes > limits.maxMessageImageBytes) {
++    throw new AttachmentError('Prompt exceeds the configured aggregate image-byte limit.', 'IMAGES_TOO_LARGE')
++  }
++  for (const image of images) {
++    await ctx.attachments.validateImage({
++      data: image.data,
++      mediaType: image.part.mediaType,
++      ...image.part.name === undefined ? {} : { name: image.part.name },
++    })
++  }
++  const root = voiceStorageRoot()
++  const blocks: ContentBlock[] = []
++  for (const item of prepared) {
++    if (!('data' in item)) {
++      blocks.push({ type: 'text', text: item.text })
++      continue
++    }
++    if (item.part.type === 'voice') {
++      // [本地改造 2026-08-16] 语音消息：录音落盘（与图片同池的内容寻址对象）。
++      // 落盘后**同步自动 ASR**（本地 sherpa 服务）并把识别文本写入 attachment.transcript——
++      // 模型从 serialize 拿到现成识别文本直接回复：自动流程、无需 agent 自觉、
++      // 不再二次注入"用户身份"文本；识别失败时 transcript 缺省，serialize 降级为
++      // 本地路径文本，agent 可主动调工具补识别。
++      let attachment: VoiceAttachmentRef
++      try {
++        attachment = await saveVoiceFile(
++          root, item.data, item.part.mediaType, item.part.durationMs,
++        )
++      } catch {
++        throw new AttachmentError('Unable to persist voice object.', 'ATTACHMENT_WRITE_FAILED')
++      }
++      // [本地改造 2026-08-21] ASR 识别失败 = 阻断发送：语音块不进模型。
++      // 之前识别失败会把无 transcript 的语音块交给模型，serialize 降级为本地
++      // 路径文本，模型自己拿语音路径去本地识别，用户不可控。现在失败即抛错，
++      // 前端收到 attachment-error + message，提示先配置 ASR 服务。
++      const text = await transcribeVoice(voiceObjectPath(root, attachment.voiceId))
++      if (text === '') {
++        throw new AttachmentError(
++          '语音识别失败：ASR 服务未配置或识别出错，请先在「设置 → 语音服务」配置 ASR 后重试。',
++          'VOICE_ASR_FAILED',
++        )
++      }
++      attachment = { ...attachment, transcript: text }
++      blocks.push({ type: 'voice', attachment })
++      continue
++    }
++    const attachment = await ctx.attachments.saveImage({
++      data: item.data,
++      mediaType: item.part.mediaType,
++      ...item.part.name === undefined ? {} : { name: item.part.name },
++    })
++    blocks.push({ type: 'image', attachment })
++  }
++  return blocks
+ }
+ 
++/**
++ * [本地改造 2026-08-16] 语音识别已内置于 durablePromptContent：落盘后同步调本地 ASR，
++ * transcript 写入 attachment。serialize.ts 优先输出识别文本；仅当识别失败（transcript
++ * 缺省）时才降级为本地路径文本，此时 agent 可用工具补识别。
++ */
++
+ /** Search durable content for an image reference, including nested tool results. */
+ function imageBlockIn(content: unknown, match: (ref: ImageAttachmentRef) => boolean): ImageAttachmentRef | undefined {
+   if (!Array.isArray(content)) return undefined
+@@ -181,9 +314,68 @@ function imageInEvent(event: SessionEvent, match: (ref: ImageAttachmentRef) => b
+   return undefined
+ }
+ 
+-/** True when the current model-visible surface contains an image. */
+-function messagesHaveImage(messages: readonly { content: readonly ContentBlock[] }[]): boolean {
+-  return messages.some(message => contentHasImage(message.content))
++/** Search durable content for a voice reference, including nested tool results. */
++function voiceBlockIn(content: unknown, match: (ref: VoiceAttachmentRef) => boolean): VoiceAttachmentRef | undefined {
++  if (!Array.isArray(content)) return undefined
++  for (const value of content) {
++    if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
++    const block = value as { type?: unknown; attachment?: unknown; content?: unknown }
++    if (block.type === 'voice' && typeof block.attachment === 'object' && block.attachment !== null) {
++      const ref = block.attachment as VoiceAttachmentRef
++      if (match(ref)) return ref
++    }
++    if (block.type === 'tool-result') {
++      const nested = voiceBlockIn(block.content, match)
++      if (nested !== undefined) return nested
++    }
++  }
++  return undefined
++}
++
++/** Search every durable event carrier that can own model-visible voice content. */
++function voiceInEvent(event: SessionEvent, match: (ref: VoiceAttachmentRef) => boolean): VoiceAttachmentRef | undefined {
++  // [本地改造 2026-08-16] 助手语音回复事件：payload 直接携带 voiceId（非 voice 块）。
++  if (event.type === 'voice/reply') {
++    const { voiceId, mediaType, bytes, durationMs } = event.data as {
++      voiceId: string
++      mediaType: string
++      bytes: number
++      durationMs?: number
++    }
++    const ref: VoiceAttachmentRef = { voiceId, mediaType: mediaType as VoiceAttachmentRef['mediaType'], bytes, ...(durationMs === undefined ? {} : { durationMs }) }
++    return match(ref) ? ref : undefined
++  }
++  const data = event.data as {
++    content?: unknown
++    message?: { content?: unknown }
++    inserted?: Array<{ content?: unknown }>
++    chunk?: { type?: unknown; block?: unknown }
++  }
++  const direct = voiceBlockIn(data.content, match)
++  if (direct !== undefined) return direct
++  if (data.message !== undefined) {
++    const wrapped = voiceBlockIn(data.message.content, match)
++    if (wrapped !== undefined) return wrapped
++  }
++  if (data.inserted !== undefined) {
++    for (const message of data.inserted) {
++      const inserted = voiceBlockIn(message.content, match)
++      if (inserted !== undefined) return inserted
++    }
++  }
++  if (event.type === 'assistant/chunk' && data.chunk?.type === 'block-end') {
++    return voiceBlockIn([data.chunk.block], match)
++  }
++  return undefined
++}
++
++/** Resolve the first voice reference matching one opaque id. */
++function referencedVoice(events: readonly SessionEvent[], voiceId: string): VoiceAttachmentRef | undefined {
++  for (const event of events) {
++    const found = voiceInEvent(event, ref => ref.voiceId === voiceId)
++    if (found !== undefined) return found
++  }
++  return undefined
+ }
+ 
+ /** Resolve the first reference matching one opaque id. */
+@@ -1299,6 +1491,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+     broadcast({ type: 'session/queue', sessionId: session.id, items: queueItems(agent, event.data) })
+   })
+ 
++  // [本地改造 2026-08-17] 语音能力已迁移至插件 @anoslide/dsh-host-voice：
++  //   send_voice 工具 + turn/end 自动语音回复 + TTS 三引擎（默认 auto=小米优先，缺失降级 edge）。
++  //   实现见 ~/.dsh/profiles/node_modules/@anoslide/dsh-host-voice/lib/index.js（cordis.patch.yml insert）。
++  //   voice.ts 仍保留：voiceAsr/voiceTts RPC（本地转写 + 编辑器内合成）与 voiceInEvent 解析共用。
++
+   /** Remove a wait before settling it: synchronous deletion makes the first claimant win. */
+   function claimQuestion(pending: PendingQuestion, outcome: 'answered' | 'cancelled'): void {
+     pendingQuestions.delete(pending.rpcId)
+@@ -2208,18 +2405,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+                 ? {}
+                 : { reasoningEffort: ReasoningEffortId(reasoningEffort) },
+             })
+-            const pendingImage = [...found.agent.inbox.nextTurn, ...found.agent.inbox.nextStep]
+-              .some(message => contentHasImage(message.content))
+-            if (pendingImage || messagesHaveImage(found.agent.session.deriveMessages())) {
+-              const info = await ctx.llm.resolveModelInfo(resolved.provider, resolved.model)
+-              if (info.inputModalities !== undefined && !info.inputModalities.includes('image')) {
+-                return err(request, {
+-                  code: 'model-unavailable',
+-                  message: `Model "${resolved.model}" does not accept image input, but this session already contains images; select an image-capable model.`,
+-                  details: { provider, model },
+-                })
+-              }
+-            }
++            // [本地改造 2026-08-16] 移除官方"模型不支持图片就拒绝切换"的检查：
++            // 本部署图片/语音与模型原生能力解耦——llm-deepseek serialize.ts 把
++            // image/voice 块转文本（本地路径/ASR 文本），识图走视觉 MCP（look），
++            // 图片从不直接进模型。因此 inputModalities 不含 image 的模型
++            // （如 deepseek-v4-flash）在含图会话里同样可以正常切换使用。
+             const selected: ModelSelection = {
+               provider: resolved.provider,
+               model: resolved.model,
+@@ -2396,23 +2586,24 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+           ...(canonicalTimeZone === undefined ? {} : { clientTimeZone: canonicalTimeZone }),
+         }
+         const hasImage = content.some(part => part.type === 'image')
++        const hasVoice = content.some(part => part.type === 'voice')
+         const admit = async (): Promise<RpcResponse<{ accepted: true }>> => {
+           try {
+-            if (hasImage) {
+-              const current = selectionFor(agent).current
+-              const modelInfo = await ctx.llm.resolveModelInfo(current.provider, current.model)
+-              if (modelInfo.inputModalities !== undefined && !modelInfo.inputModalities.includes('image')) {
+-                return err(request, {
+-                  code: 'attachment-error',
+-                  message: `Model "${current.model}" does not support image input.`,
+-                  details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+-                })
+-              }
+-            }
++            // [本地改造 2026-08-16] 完全放行图片（参考 dsh-vscode-layout 补丁）：
++            // 图片进用户消息正常显示；llm-deepseek 序列化时把图片块转为本地附件路径文本，
++            // agent 用视觉 MCP（look）识图——不再按模型是否支持图片拦截。
+             const durable = await durablePromptContent(ctx, content)
+             const message: UserMessage = createUserMessage({ content: durable, source })
+-            if (mode === 'steer') agent.steer(message)
+-            else agent.followup(message)
++            if (mode === 'steer') {
++              agent.steer(message)
++            } else {
++              // [本地改造 2026-08-16] 语音消息与文本/图片一样走正常 followup：voice
++              // 块入队上屏（前端语音卡片可播放），识别文本已写入 attachment.transcript，
++              // 模型从序列化文本直接拿到转写内容。
++              // [本地改造 2026-08-21] ASR 识别失败的语音消息在 durablePromptContent
++              // 阶段即被阻断（VOICE_ASR_FAILED），不会走到这里。
++              agent.followup(message)
++            }
+           } catch (error: unknown) {
+             if (error instanceof AttachmentError) {
+               return err(request, {
+@@ -2429,7 +2620,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+           }
+           return ok(request, { accepted: true as const })
+         }
+-        return hasImage ? serializeImageAdmission(agent, admit) : admit()
++        return hasImage || hasVoice ? serializeImageAdmission(agent, admit) : admit()
+       },
+ 
+       async attachment(request) {
+@@ -2481,6 +2672,129 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+         }
+       },
+ 
++      async voice(request) {
++        const { sessionId, voiceId } = request.payload
++        console.error(`[voice-rpc-debug] voice called sessionId=${sessionId} voiceId=${voiceId}`)
++        let state: SessionReadState
++        try {
++          state = await readSessionState(sessionId)
++        } catch (error: unknown) {
++          if (error instanceof SessionNotFound) {
++            return err(request, {
++              code: 'session-not-found',
++              message: error.message,
++              details: { sessionId },
++            })
++          }
++          return err(request, {
++            code: 'internal',
++            message: `voice authorization unavailable for session "${sessionId}": ${String(error)}`,
++            details: {},
++          })
++        }
++        const ref = referencedVoice(state.events, voiceId)
++        if (ref === undefined) {
++          return err(request, {
++            code: 'attachment-error',
++            message: 'Voice object is not referenced by this session.',
++            details: { reason: 'VOICE_NOT_REFERENCED' },
++          })
++        }
++        try {
++          const stored = await readVoiceFile(voiceStorageRoot(), ref)
++          return ok(request, {
++            attachment: stored.ref,
++            data: Buffer.from(stored.data).toString('base64'),
++          })
++        } catch {
++          return err(request, {
++            code: 'internal',
++            message: 'Unable to read voice object.',
++            details: {},
++          })
++        }
++      },
++
++      async voiceAsr(request) {
++        // On-the-fly transcription for the "speak-to-text" gesture: decode the
++        // recording to a temp file, transcribe, and remove it — nothing durable.
++        const { data } = request.payload
++        let tempPath: string | undefined
++        try {
++          const bytes = decodeBase64(data)
++          tempPath = join(process.env.TEMP ?? '/tmp', `dsh-asr-in-${randomUUID()}`)
++          await writeFile(tempPath, bytes)
++          const text = await transcribeVoice(tempPath)
++          return ok(request, { text: text === '' ? null : text })
++        } catch {
++          return ok(request, { text: null })
++        } finally {
++          if (tempPath !== undefined) await rm(tempPath, { force: true }).catch(() => {})
++        }
++      },
++
++      async voiceTts(request) {
++        // Local TTS through the agents-to-im engine: synthesize to mp3 (the
++        // browser-universal format), read the bytes back, and return them
++        // inline — nothing durable, the reply plays locally.
++        const { text, provider } = request.payload
++        try {
++          const audio = await synthesizeReplyVoice(text, provider)
++          if (audio === null) return ok(request, null)
++          return ok(request, {
++            mediaType: audio.mediaType,
++            data: Buffer.from(audio.data).toString('base64'),
++            ...(audio.durationMs === undefined ? {} : { durationMs: audio.durationMs }),
++          })
++        } catch {
++          return ok(request, null)
++        }
++      },
++
++      async sendVoiceMessage(request) {
++        // [本地改造 2026-08-16] 主动发语音消息：合成 TTS → 落盘 → 追加 voice/reply
++        // 事件（独立持久语音横条）。agent 通过本 RPC 可以主动给用户发语音。
++        const { sessionId, text, provider } = request.payload
++        try {
++          const audio = await synthesizeReplyVoice(text, provider)
++          if (audio === null) {
++            return err(request, {
++              code: 'internal',
++              message: 'voice synthesis failed',
++              details: {},
++            })
++          }
++          const attachment = await saveVoiceFile(
++            voiceStorageRoot(), audio.data, audio.mediaType as never, audio.durationMs,
++          )
++          const agent = ctx.agents.get(sessionId)
++          if (agent === undefined || agent.session.id !== sessionId) {
++            return err(request, {
++              code: 'session-not-found',
++              message: 'no attached session for sendVoiceMessage',
++              details: { sessionId },
++            })
++          }
++          const turn = agent.session.events
++            .filter((event): event is SessionEvent & { type: 'turn/start' } => event.type === 'turn/start')
++            .at(-1)?.data.turn ?? 0
++          agent.session.append('voice/reply', {
++            turn,
++            voiceId: attachment.voiceId,
++            mediaType: attachment.mediaType,
++            bytes: attachment.bytes,
++            ...(attachment.durationMs === undefined ? {} : { durationMs: attachment.durationMs }),
++          })
++          return ok(request, { accepted: true as const })
++        } catch {
++          return err(request, {
++            code: 'internal',
++            message: 'sendVoiceMessage failed',
++            details: {},
++          })
++        }
++      },
++
+       updateQueue(request) {
+         const { sessionId, itemId, action } = request.payload
+         if (action.kind === 'edit' && action.content.some(block => block.type !== 'text')) {
+@@ -3340,6 +3654,25 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+       },
+     },
+ 
++    balance: {
++      async get(request) {
++        // [本地改造 2026-08-16] 余额指示只对 deepseek 直连模型显示：
++        // 调用方带上 sessionId 时，检查该会话当前 provider；非
++        // deepseek-official（如 qwen 百炼）直接返回 null，前端据此隐藏。
++        const { sessionId } = request.payload
++        if (sessionId !== undefined) {
++          const found = await agentFor(sessionId)
++          if (!('error' in found)) {
++            const current = selectionFor(found.agent).current
++            if (current.provider !== 'deepseek-official') {
++              return ok(request, { balance: null })
++            }
++          }
++        }
++        return ok(request, { balance: await readDeepSeekBalance(ctx) })
++      },
++    },
++
+     events: {
+       mux(_request, signal) {
+         const queue = new FrameQueue<RpcRequest<MuxFrame>>()
+diff --git a/packages/host/apiproxy/src/api/balance.schema.ts b/packages/host/apiproxy/src/api/balance.schema.ts
+new file mode 100644
+index 0000000000..3a77b47e6c
+--- /dev/null
++++ b/packages/host/apiproxy/src/api/balance.schema.ts
+@@ -0,0 +1,30 @@
++/**
++ * balance domain zod schemas (names derived from map keys: balanceGetRequestSchema /
++ * balanceGetValueSchema).
++ */
++
++import { z } from 'zod'
++import type { RequestPayload, ResponseValue } from './rpc-map.ts'
++import type { Wire } from './rpc.schema.ts'
++import type { BalanceView } from './balance.ts'
++import { sessionIdSchema } from './sessions.schema.ts'
++
++/** BalanceView row of balance.get. */
++export const balanceViewSchema = z.object({
++  currency: z.string().min(1),
++  total: z.string().min(1),
++  granted: z.string().min(1),
++  toppedUp: z.string().min(1),
++}) satisfies z.ZodType<Wire<BalanceView>>
++
++/** balance.get request payload. */
++export const balanceGetRequestSchema = z.object({
++  // [本地改造 2026-08-16] 可选 sessionId：host 据此判断当前会话的模型 provider
++  // 是否为 deepseek 直连——非直连（如 qwen 百炼）时余额指示不显示。
++  sessionId: sessionIdSchema.optional(),
++}) satisfies z.ZodType<Wire<RequestPayload<'balance.get'>>>
++
++/** balance.get response value. */
++export const balanceGetValueSchema = z.object({
++  balance: balanceViewSchema.nullable(),
++}) satisfies z.ZodType<Wire<ResponseValue<'balance.get'>>>
+diff --git a/packages/host/apiproxy/src/api/balance.ts b/packages/host/apiproxy/src/api/balance.ts
+new file mode 100644
+index 0000000000..ec764e384f
+--- /dev/null
++++ b/packages/host/apiproxy/src/api/balance.ts
+@@ -0,0 +1,32 @@
++/**
++ * balance domain contract: DeepSeek 直连账户余额查询。仅当部署配置了
++ * DEEPSEEK_API_KEY（直连 deepseek 路由）时有意义；走 LiteLLM 等其他
++ * 路由的部署返回 null（前端据此隐藏余额指示）。
++ */
++
++import type { RpcRequest, RpcResponse } from './rpc.ts'
++import type { SessionId } from '@deepseek-ai/dsh-session/types'
++
++/** Wire view of one DeepSeek balance entry. */
++export interface BalanceView {
++  /** 币种（如 CNY）。 */
++  currency: string
++  /** 总额。 */
++  total: string
++  /** 赠送金额。 */
++  granted: string
++  /** 充值金额。 */
++  toppedUp: string
++}
++
++/** Balance-domain unary methods (the map keys balance.* of RpcMethodMap). */
++export interface BalanceApi {
++  /**
++   * 查询 DeepSeek 直连账户余额。无 DEEPSEEK_API_KEY 凭证或查询失败时
++   * 返回 null（非直连部署/网络异常均不报错——余额只是辅助指示）。
++   * [本地改造 2026-08-16] 可选 sessionId：调用方传入当前会话 id 时，
++   * host 仅在该会话的模型 provider 为 deepseek 直连（deepseek-official）
++   * 时返回余额，否则返回 null（余额指示只对 deepseek 直连模型显示）。
++   */
++  get(request: RpcRequest<{ sessionId?: SessionId }>): Promise<RpcResponse<{ balance: BalanceView | null }>>
++}
+diff --git a/packages/host/apiproxy/src/api/index.ts b/packages/host/apiproxy/src/api/index.ts
+index b5e1d1ffd9..83c0b56c17 100644
+--- a/packages/host/apiproxy/src/api/index.ts
++++ b/packages/host/apiproxy/src/api/index.ts
+@@ -15,6 +15,7 @@ import type { GoalsApi } from './goals.ts'
+ import type { SettingsApi } from './settings.ts'
+ import type { CredentialsApi } from './credentials.ts'
+ import type { LlmApi } from './llm.ts'
++import type { BalanceApi } from './balance.ts'
+ import type { DownloadsApi } from './downloads.ts'
+ import type { ClientResponse, RpcReceipt } from './rpc.ts'
+ 
+@@ -31,6 +32,8 @@ export interface ApiProxy {
+   settings: SettingsApi
+   credentials: CredentialsApi
+   llm: LlmApi
++  /** DeepSeek 直连账户余额（辅助指示；非直连返回 null）。 */
++  balance: BalanceApi
+   /** Host-only download surfaces (GET, no wire envelope); absent from IApiClient. */
+   downloads: DownloadsApi
+   /**
+@@ -46,6 +49,7 @@ export type {
+   HistoryEntry, ModelCatalogFailure, ModelCatalogModel, ModelProviderGroup, ModelReasoning,
+   ModelReasoningEffort, ModelSelection, PromptContentPart, QueueAction, SessionModels,
+   SessionListMetadata, SessionProjectionsBlock, SessionSearchItem, SessionsApi, SessionSummary,
++  VoiceAttachmentRef, VoiceMediaType,
+ } from './sessions.ts'
+ export type { DirectoryEntry, DirectoryListing, HostApi } from './host.ts'
+ export type {
+@@ -61,6 +65,7 @@ export type { GoalsApi, GoalId, GoalRef } from './goals.ts'
+ export type { SettingsApi, SettingsNamespaceView, SettingsPathOpView, SettingsSecretView } from './settings.ts'
+ export type { CredentialsApi, CredentialView } from './credentials.ts'
+ export type { ConfigurableProviderView, DiscoveredModelView, LlmApi } from './llm.ts'
++export type { BalanceApi, BalanceView } from './balance.ts'
+ export type { DownloadsApi } from './downloads.ts'
+ export type { ApprovalResponsePayload } from './approvals.ts'
+ 
+diff --git a/packages/host/apiproxy/src/api/rpc-map.ts b/packages/host/apiproxy/src/api/rpc-map.ts
+index 80dede1799..1f70c4c8a2 100644
+--- a/packages/host/apiproxy/src/api/rpc-map.ts
++++ b/packages/host/apiproxy/src/api/rpc-map.ts
+@@ -13,6 +13,7 @@ import type { GoalsApi } from './goals.ts'
+ import type { SettingsApi } from './settings.ts'
+ import type { CredentialsApi } from './credentials.ts'
+ import type { LlmApi } from './llm.ts'
++import type { BalanceApi } from './balance.ts'
+ import type { SubagentsApi } from './subagents.ts'
+ import type { RpcResponse } from './rpc.ts'
+ 
+@@ -32,6 +33,10 @@ export interface RpcMethodMap {
+   'session.fork': SessionsApi['fork']
+   'session.prompt': SessionsApi['prompt']
+   'session.attachment': SessionsApi['attachment']
++  'session.voice': SessionsApi['voice']
++  'session.voiceAsr': SessionsApi['voiceAsr']
++  'session.voiceTts': SessionsApi['voiceTts']
++  'session.sendVoiceMessage': SessionsApi['sendVoiceMessage']
+   'session.updateQueue': SessionsApi['updateQueue']
+   'session.cancel': SessionsApi['cancel']
+   'subagent.list': SubagentsApi['list']
+@@ -74,6 +79,7 @@ export interface RpcMethodMap {
+   'llm.providers': LlmApi['providers']
+   'llm.models': LlmApi['models']
+   'llm.discoverModels': LlmApi['discoverModels']
++  'balance.get': BalanceApi['get']
+ }
+ 
+ /** Business request payload of method K (reaches through the RpcRequest narrow form to payload). */
+diff --git a/packages/host/apiproxy/src/api/sessions.schema.ts b/packages/host/apiproxy/src/api/sessions.schema.ts
+index c415015776..ba4a8596b4 100644
+--- a/packages/host/apiproxy/src/api/sessions.schema.ts
++++ b/packages/host/apiproxy/src/api/sessions.schema.ts
+@@ -13,6 +13,7 @@ import type { Wire } from './rpc.schema.ts'
+ import type {
+   HistoryEntry, ModelCatalogFailure, ModelCatalogModel, ModelProviderGroup, ModelReasoning,
+   ModelReasoningEffort, ModelSelection, SessionListMetadata, SessionProjectionsBlock, SessionSearchItem, SessionSummary,
++  VoiceAttachmentRef,
+ } from './sessions.ts'
+ import type { ToolEventView } from './events.ts'
+ import type { AttachmentIdType, ImageAttachmentLimits, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+@@ -279,10 +280,21 @@ export const imageMediaTypeSchema = z.union([
+   z.literal('image/gif'),
+ ])
+ 
++/** Audio media types accepted by the version-one browser voice wire. */
++export const voiceMediaTypeSchema = z.union([
++  z.literal('audio/webm'),
++  z.literal('audio/ogg'),
++  z.literal('audio/mp4'),
++  z.literal('audio/wav'),
++  // [本地改造 2026-08-16] TTS 语音回复为 MP3（synthesizeReplyVoice 统一转 mp3）。
++  z.literal('audio/mpeg'),
++])
++
+ /** Prompt wire content is intentionally narrower than merge-extensible durable core content. */
+ export const promptContentPartSchema = z.discriminatedUnion('type', [
+   z.object({ type: z.literal('text'), text: z.string() }),
+   z.object({ type: z.literal('image'), mediaType: imageMediaTypeSchema, data: z.string(), name: z.string().optional() }),
++  z.object({ type: z.literal('voice'), mediaType: voiceMediaTypeSchema, data: z.string(), durationMs: z.number().int().positive().optional() }),
+ ])
+ 
+ /** session.prompt request payload, including optional browser-local request provenance. */
+@@ -327,6 +339,66 @@ export const sessionAttachmentValueSchema = z.object({
+   data: z.string(),
+ }) satisfies z.ZodType<Wire<ResponseValue<'session.attachment'>>>
+ 
++/** Durable voice reference returned from the authenticated session lookup. */
++export const voiceAttachmentRefSchema = z.object({
++  voiceId: z.string().min(1),
++  mediaType: voiceMediaTypeSchema,
++  bytes: z.number().int().positive(),
++  durationMs: z.number().int().positive().optional(),
++  transcript: z.string().optional(),
++}) as unknown as z.ZodType<VoiceAttachmentRef>
++
++/** session.voice request payload. */
++export const sessionVoiceRequestSchema = z.object({
++  sessionId: sessionIdSchema,
++  voiceId: z.string().min(1),
++}) satisfies z.ZodType<Wire<RequestPayload<'session.voice'>>>
++
++/** session.voice response value. */
++export const sessionVoiceValueSchema = z.object({
++  attachment: voiceAttachmentRefSchema,
++  data: z.string(),
++}) satisfies z.ZodType<Wire<ResponseValue<'session.voice'>>>
++
++/** session.voiceAsr request payload. */
++export const sessionVoiceAsrRequestSchema = z.object({
++  sessionId: sessionIdSchema,
++  mediaType: voiceMediaTypeSchema,
++  data: z.string(),
++  durationMs: z.number().int().positive().optional(),
++}) satisfies z.ZodType<Wire<RequestPayload<'session.voiceAsr'>>>
++
++/** session.voiceAsr response value. */
++export const sessionVoiceAsrValueSchema = z.object({
++  text: z.string().nullable(),
++}) satisfies z.ZodType<Wire<ResponseValue<'session.voiceAsr'>>>
++
++/** session.voiceTts request payload. */
++export const sessionVoiceTtsRequestSchema = z.object({
++  sessionId: sessionIdSchema,
++  text: z.string().min(1),
++  provider: z.string().optional(),
++}) satisfies z.ZodType<Wire<RequestPayload<'session.voiceTts'>>>
++
++/** session.voiceTts response value. */
++export const sessionVoiceTtsValueSchema = z.object({
++  mediaType: z.string(),
++  data: z.string(),
++  durationMs: z.number().int().positive().optional(),
++}).nullable() satisfies z.ZodType<Wire<ResponseValue<'session.voiceTts'>>>
++
++/** session.sendVoiceMessage request payload. */
++export const sessionSendVoiceMessageRequestSchema = z.object({
++  sessionId: sessionIdSchema,
++  text: z.string().min(1),
++  provider: z.string().optional(),
++}) satisfies z.ZodType<Wire<RequestPayload<'session.sendVoiceMessage'>>>
++
++/** session.sendVoiceMessage response value. */
++export const sessionSendVoiceMessageValueSchema = z.object({
++  accepted: z.literal(true),
++}) satisfies z.ZodType<Wire<ResponseValue<'session.sendVoiceMessage'>>>
++
+ /** session.updateQueue request payload. */
+ export const sessionUpdateQueueRequestSchema = z.object({
+   sessionId: sessionIdSchema,
+diff --git a/packages/host/apiproxy/src/api/sessions.ts b/packages/host/apiproxy/src/api/sessions.ts
+index 2e7c9b22f4..3ace1972e3 100644
+--- a/packages/host/apiproxy/src/api/sessions.ts
++++ b/packages/host/apiproxy/src/api/sessions.ts
+@@ -87,6 +87,24 @@ export interface SessionProjectionsBlock {
+ export type PromptContentPart =
+   | { type: 'text'; text: string }
+   | { type: 'image'; mediaType: ImageMediaType; data: string; name?: string }
++  | { type: 'voice'; mediaType: VoiceMediaType; data: string; durationMs?: number }
++
++/** Audio formats accepted by the version-one browser voice wire. */
++export type VoiceMediaType = 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/wav' | 'audio/mpeg'
++
++/** Durable, serializable metadata for one immutable voice object. */
++export interface VoiceAttachmentRef {
++  /** Opaque storage identifier; never a filesystem path or bearer URL. */
++  voiceId: string
++  /** Media type of the stored browser-uploaded bytes. */
++  mediaType: VoiceMediaType
++  /** Exact encoded byte length. */
++  bytes: number
++  /** Optional recorder-reported length in milliseconds. */
++  durationMs?: number
++  /** Local ASR transcript; absent when recognition failed or is unavailable. */
++  transcript?: string
++}
+ 
+ /** Complete model selection for one session. */
+ export interface ModelSelection {
+@@ -356,6 +374,49 @@ export interface SessionsApi {
+   attachment(request: RpcRequest<{ sessionId: SessionId; attachmentId: AttachmentIdType }>):
+   Promise<RpcResponse<{ attachment: ImageAttachmentRef; data: string }>>
+ 
++  /** Reads one durable voice object after proving that this session's log references its id. */
++  voice(request: RpcRequest<{ sessionId: SessionId; voiceId: string }>):
++  Promise<RpcResponse<{ attachment: VoiceAttachmentRef; data: string }>>
++
++  /**
++   * Transcribe one browser recording on the fly without storing it (the
++   * "speak-to-text" gesture sends the resulting text as an ordinary message).
++   * @param request - temporary voice bytes exactly as the composer captured them.
++   * @returns recognized text, or null when recognition failed or is unavailable.
++   */
++  voiceAsr(request: RpcRequest<{
++    sessionId: SessionId
++    mediaType: VoiceMediaType
++    data: string
++    durationMs?: number
++  }>): Promise<RpcResponse<{ text: string | null }>>
++
++  /**
++   * Synthesize one reply into speech through the local TTS engines and return
++   * the encoded audio directly (nothing durable — the browser plays it inline).
++   * @param request - reply text and optional TTS provider override (auto by default).
++   * @returns encoded audio and declared media type, or null when synthesis failed.
++   */
++  voiceTts(request: RpcRequest<{
++    sessionId: SessionId
++    text: string
++    provider?: string
++  }>): Promise<RpcResponse<{ mediaType: string; data: string; durationMs?: number } | null>>
++
++  /**
++   * [本地改造 2026-08-16] Send one synthesized voice message into the session:
++   * the host speaks `text`, persists it as a `voice/reply` event (an independent
++   * durable voice row beside the user's own voice messages), so the agent can
++   * actively send a voice message on its own — no user voice needed.
++   * @param request - text to speak and optional TTS provider override.
++   * @returns accepted once the voice/reply event is logged.
++   */
++  sendVoiceMessage(request: RpcRequest<{
++    sessionId: SessionId
++    text: string
++    provider?: string
++  }>): Promise<RpcResponse<{ accepted: true }>>
++
+   /**
+    * Edits, removes, or strictly steers one pending queued occurrence on an ordinary session.
+    * Session-backed subagents reject with `agent-busy`.
+diff --git a/packages/host/apiproxy/src/edge-tts.ts b/packages/host/apiproxy/src/edge-tts.ts
+new file mode 100644
+index 0000000000..6b2b3dcbcc
+--- /dev/null
++++ b/packages/host/apiproxy/src/edge-tts.ts
+@@ -0,0 +1,119 @@
++/**
++ * Microsoft Edge TTS — 原生 WebSocket 客户端（免费，无需 API key）。
++ * [本地改造 2026-08-16] 从 agents-to-im 移植进 DSH 本体（TTS 独立化，不再依赖外部工具）。
++ * 对齐 Python edge-tts v7.2.8 的 DRM + Headers；Sec-MS-GEC 令牌放在 URL 参数里。
++ * @module dsh-host-apiproxy/edge-tts
++ */
++
++import WebSocket from 'ws'
++import { createHash, randomBytes } from 'node:crypto'
++
++const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
++const BASE_URL = 'speech.platform.bing.com/consumer/speech/synthesize/readaloud'
++const CHROMIUM_FULL_VERSION = '143.0.3650.75'
++const CHROMIUM_MAJOR_VERSION = '143'
++const SEC_MS_GEC_VERSION = `1-${CHROMIUM_FULL_VERSION}`
++const WIN_EPOCH = 11644473600
++const S_TO_NS = 1e9
++
++function generateSecMsGec(): string {
++  let ticks = Date.now() / 1000
++  ticks += WIN_EPOCH
++  ticks -= ticks % 300
++  ticks *= S_TO_NS / 100
++  const strToHash = `${Math.floor(ticks)}${TRUSTED_CLIENT_TOKEN}`
++  return createHash('sha256').update(strToHash, 'ascii').digest('hex').toUpperCase()
++}
++
++function generateMuid(): string {
++  return randomBytes(16).toString('hex').toUpperCase()
++}
++
++function uuid(): string {
++  return crypto.randomUUID().replaceAll('-', '')
++}
++
++function escapeXml(s: string): string {
++  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
++    .replace(/"/g, '&quot;').replace(/'/g, '&apos;')
++}
++
++function getWssUrl(): string {
++  return `wss://${BASE_URL}/edge/v1?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}`
++    + `&Sec-MS-GEC=${generateSecMsGec()}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`
++}
++
++function getWssHeaders(): Record<string, string> {
++  return {
++    'Pragma': 'no-cache',
++    'Cache-Control': 'no-cache',
++    'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
++    'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROMIUM_MAJOR_VERSION}.0.0.0 Safari/537.36 Edg/${CHROMIUM_MAJOR_VERSION}.0.0.0`,
++    'Accept-Encoding': 'gzip, deflate, br, zstd',
++    'Accept-Language': 'en-US,en;q=0.9',
++    'Cookie': `muid=${generateMuid()};`,
++  }
++}
++
++/**
++ * Synthesize speech through the free Microsoft Edge endpoint.
++ * @param text - plain text to speak.
++ * @param voice - Edge voice name (default zh-CN-XiaoxiaoNeural).
++ * @returns MP3 bytes (audio-24khz-48kbitrate-mono-mp3).
++ */
++export function edgeTts(text: string, voice = 'zh-CN-XiaoxiaoNeural'): Promise<Buffer> {
++  return new Promise((resolve, reject) => {
++    const ws = new WebSocket(getWssUrl(), { headers: getWssHeaders() })
++    const audioData: Buffer[] = []
++    let messageTimeout: ReturnType<typeof setTimeout> | undefined
++
++    const connectTimeout = setTimeout(() => {
++      ws.terminate()
++      reject(new Error('Edge TTS WebSocket connect timeout (10s)'))
++    }, 10_000)
++
++    ws.on('message', (rawData, isBinary) => {
++      // ws 默认 binaryType='nodebuffer'：运行时数据就是 Buffer。
++      const buf = rawData as Buffer
++      if (!isBinary) {
++        const str = buf.toString('utf8')
++        if (str.includes('turn.end')) {
++          if (messageTimeout !== undefined) clearTimeout(messageTimeout)
++          resolve(Buffer.concat(audioData))
++          ws.close()
++        }
++        return
++      }
++      const separator = 'Path:audio\r\n'
++      const idx = buf.indexOf(separator)
++      if (idx !== -1) audioData.push(buf.subarray(idx + separator.length))
++    })
++
++    ws.on('error', (err) => {
++      clearTimeout(connectTimeout)
++      reject(err)
++    })
++
++    ws.on('open', () => {
++      clearTimeout(connectTimeout)
++      messageTimeout = setTimeout(() => {
++        ws.close()
++        reject(new Error('Edge TTS message timeout (30s)'))
++      }, 30_000)
++
++      const speechConfig = JSON.stringify({
++        context: { synthesis: { audio: {
++          metadataoptions: { sentenceBoundaryEnabled: false, wordBoundaryEnabled: false },
++          outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
++        } } },
++      })
++      const configMsg = `X-Timestamp:${Date()}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n${speechConfig}`
++      ws.send(configMsg, { compress: true })
++
++      const ssml = '<speak version=\'1.0\' xmlns=\'http://www.w3.org/2001/10/synthesis\' xml:lang=\'zh-CN\'>'
++        + `<voice name='${voice}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>${escapeXml(text)}</prosody></voice></speak>`
++      const ssmlMsg = `X-RequestId:${uuid()}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${Date()}Z\r\nPath:ssml\r\n\r\n${ssml}`
++      ws.send(ssmlMsg, { compress: true })
++    })
++  })
++}
+diff --git a/packages/host/apiproxy/src/fetch/client.ts b/packages/host/apiproxy/src/fetch/client.ts
+index 70e3ece58f..27ab78e6db 100644
+--- a/packages/host/apiproxy/src/fetch/client.ts
++++ b/packages/host/apiproxy/src/fetch/client.ts
+@@ -30,6 +30,10 @@ import {
+   sessionSearchValueSchema,
+   sessionSelectModelValueSchema,
+   sessionUpdateQueueValueSchema,
++  sessionVoiceAsrValueSchema,
++  sessionVoiceTtsValueSchema,
++  sessionVoiceValueSchema,
++  sessionSendVoiceMessageValueSchema,
+ } from '../api/sessions.schema.ts'
+ import {
+   workspaceArchiveSessionValueSchema,
+@@ -61,6 +65,7 @@ import {
+   credentialsDescribeValueSchema, credentialsSetValueSchema, credentialsUnsetValueSchema,
+ } from '../api/credentials.schema.ts'
+ import { llmDiscoverModelsValueSchema, llmModelsValueSchema, llmProvidersValueSchema } from '../api/llm.schema.ts'
++import { balanceGetValueSchema } from '../api/balance.schema.ts'
+ import {
+   subagentHistoryValueSchema,
+   subagentInterruptValueSchema,
+@@ -96,6 +101,10 @@ export interface IApiClient {
+     fork(payload: RequestPayload<'session.fork'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.fork'>>>
+     prompt(payload: RequestPayload<'session.prompt'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.prompt'>>>
+     attachment(payload: RequestPayload<'session.attachment'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.attachment'>>>
++    voice(payload: RequestPayload<'session.voice'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.voice'>>>
++    voiceAsr(payload: RequestPayload<'session.voiceAsr'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.voiceAsr'>>>
++    voiceTts(payload: RequestPayload<'session.voiceTts'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.voiceTts'>>>
++    sendVoiceMessage(payload: RequestPayload<'session.sendVoiceMessage'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.sendVoiceMessage'>>>
+     updateQueue(payload: RequestPayload<'session.updateQueue'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.updateQueue'>>>
+     cancel(payload: RequestPayload<'session.cancel'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.cancel'>>>
+   }
+@@ -161,6 +170,9 @@ export interface IApiClient {
+     models(payload: RequestPayload<'llm.models'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.models'>>>
+     discoverModels(payload: RequestPayload<'llm.discoverModels'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.discoverModels'>>>
+   }
++  balance: {
++    get(payload: RequestPayload<'balance.get'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'balance.get'>>>
++  }
+   /** client-response passthrough (rpcId is a backfill of the server-request's id — never minted here). */
+   respond(message: ClientResponse, signal?: AbortSignal): Promise<RpcReceipt>
+ }
+@@ -180,6 +192,10 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
+   'session.fork': sessionForkValueSchema,
+   'session.prompt': sessionPromptValueSchema,
+   'session.attachment': sessionAttachmentValueSchema,
++  'session.voice': sessionVoiceValueSchema,
++  'session.voiceAsr': sessionVoiceAsrValueSchema,
++  'session.voiceTts': sessionVoiceTtsValueSchema,
++  'session.sendVoiceMessage': sessionSendVoiceMessageValueSchema,
+   'session.updateQueue': sessionUpdateQueueValueSchema,
+   'session.cancel': sessionCancelValueSchema,
+   'subagent.list': subagentListValueSchema,
+@@ -222,6 +238,7 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
+   'llm.providers': llmProvidersValueSchema,
+   'llm.models': llmModelsValueSchema,
+   'llm.discoverModels': llmDiscoverModelsValueSchema,
++  'balance.get': balanceGetValueSchema,
+ }
+ 
+ /** Default timeout for bounded unary calls (rpc-compare 2026-07-19: a hung host must not leave callers pending forever). */
+@@ -420,6 +437,10 @@ export abstract class AbstractApiClient implements IApiClient {
+     fork: (payload, signal) => this.callUnary('session.fork', payload, signal),
+     prompt: (payload, signal) => this.callUnary('session.prompt', payload, signal),
+     attachment: (payload, signal) => this.callUnary('session.attachment', payload, signal),
++    voice: (payload, signal) => this.callUnary('session.voice', payload, signal),
++    voiceAsr: (payload, signal) => this.callUnary('session.voiceAsr', payload, signal),
++    voiceTts: (payload, signal) => this.callUnary('session.voiceTts', payload, signal),
++    sendVoiceMessage: (payload, signal) => this.callUnary('session.sendVoiceMessage', payload, signal),
+     updateQueue: (payload, signal) => this.callUnary('session.updateQueue', payload, signal),
+     cancel: (payload, signal) => this.callUnary('session.cancel', payload, signal),
+   }
+@@ -500,6 +521,10 @@ export abstract class AbstractApiClient implements IApiClient {
+     discoverModels: (payload, signal) => this.callUnary('llm.discoverModels', payload, signal),
+   }
+ 
++  readonly balance: IApiClient['balance'] = {
++    get: (payload, signal) => this.callUnary('balance.get', payload, signal),
++  }
++
+   readonly events: IApiClient['events'] = {
+     mux: (payload, signal, onOpen) => this.openMux(payload, signal, onOpen),
+     host: (payload, signal, onOpen) => this.openHost(payload, signal, onOpen),
+diff --git a/packages/host/apiproxy/src/fetch/handler.ts b/packages/host/apiproxy/src/fetch/handler.ts
+index 697171ec53..e600ea2a07 100644
+--- a/packages/host/apiproxy/src/fetch/handler.ts
++++ b/packages/host/apiproxy/src/fetch/handler.ts
+@@ -28,6 +28,10 @@ import {
+   sessionSearchRequestSchema,
+   sessionSelectModelRequestSchema,
+   sessionUpdateQueueRequestSchema,
++  sessionVoiceAsrRequestSchema,
++  sessionVoiceRequestSchema,
++  sessionVoiceTtsRequestSchema,
++  sessionSendVoiceMessageRequestSchema,
+ } from '../api/sessions.schema.ts'
+ import {
+   hostCreateDirectoryRequestSchema, hostDescribeRequestSchema,
+@@ -64,6 +68,7 @@ import {
+   credentialsDescribeRequestSchema, credentialsSetRequestSchema, credentialsUnsetRequestSchema,
+ } from '../api/credentials.schema.ts'
+ import { llmDiscoverModelsRequestSchema, llmModelsRequestSchema, llmProvidersRequestSchema } from '../api/llm.schema.ts'
++import { balanceGetRequestSchema } from '../api/balance.schema.ts'
+ import {
+   subagentHistoryRequestSchema,
+   subagentInterruptRequestSchema,
+@@ -98,6 +103,10 @@ const UNARY_ROUTES: UnaryRoutes = {
+   'session.fork': { schema: sessionForkRequestSchema, invoke: (api, r) => api.sessions.fork(r) },
+   'session.prompt': { schema: sessionPromptRequestSchema, invoke: (api, r) => api.sessions.prompt(r) },
+   'session.attachment': { schema: sessionAttachmentRequestSchema, invoke: (api, r) => api.sessions.attachment(r) },
++  'session.voice': { schema: sessionVoiceRequestSchema, invoke: (api, r) => api.sessions.voice(r) },
++  'session.voiceAsr': { schema: sessionVoiceAsrRequestSchema, invoke: (api, r) => api.sessions.voiceAsr(r) },
++  'session.voiceTts': { schema: sessionVoiceTtsRequestSchema, invoke: (api, r) => api.sessions.voiceTts(r) },
++  'session.sendVoiceMessage': { schema: sessionSendVoiceMessageRequestSchema, invoke: (api, r) => api.sessions.sendVoiceMessage(r) },
+   'session.updateQueue': { schema: sessionUpdateQueueRequestSchema, invoke: (api, r) => api.sessions.updateQueue(r) },
+   'session.cancel': { schema: sessionCancelRequestSchema, invoke: (api, r) => api.sessions.cancel(r) },
+   'subagent.list': { schema: subagentListRequestSchema, invoke: (api, r, signal) => api.subagents.list(r, signal) },
+@@ -140,6 +149,7 @@ const UNARY_ROUTES: UnaryRoutes = {
+   'llm.providers': { schema: llmProvidersRequestSchema, invoke: (api, r) => api.llm.providers(r) },
+   'llm.models': { schema: llmModelsRequestSchema, invoke: (api, r) => api.llm.models(r) },
+   'llm.discoverModels': { schema: llmDiscoverModelsRequestSchema, invoke: (api, r, signal) => api.llm.discoverModels(r, signal) },
++  'balance.get': { schema: balanceGetRequestSchema, invoke: (api, r) => api.balance.get(r) },
+ }
+ 
+ /** Route lookup that narrows an arbitrary path segment to a map key (single cast point for the string→key refinement). */
+diff --git a/packages/host/apiproxy/src/index.ts b/packages/host/apiproxy/src/index.ts
+index ac6c770801..edbebc9539 100644
+--- a/packages/host/apiproxy/src/index.ts
++++ b/packages/host/apiproxy/src/index.ts
+@@ -89,6 +89,7 @@ export class ApiProxyService extends Service implements ApiProxy {
+   readonly settings: ApiProxy['settings']
+   readonly credentials: ApiProxy['credentials']
+   readonly llm: ApiProxy['llm']
++  readonly balance: ApiProxy['balance']
+   readonly events: ApiProxy['events']
+   readonly downloads: ApiProxy['downloads']
+   readonly respond: ApiProxy['respond']
+@@ -117,6 +118,7 @@ export class ApiProxyService extends Service implements ApiProxy {
+     this.settings = api.settings
+     this.credentials = api.credentials
+     this.llm = api.llm
++    this.balance = api.balance
+     this.events = api.events
+     this.downloads = api.downloads
+     // createApiProxy returns closures (no `this` capture), so the bind is
+diff --git a/packages/host/apiproxy/src/voice.ts b/packages/host/apiproxy/src/voice.ts
+new file mode 100644
+index 0000000000..33a3eb7d19
+--- /dev/null
++++ b/packages/host/apiproxy/src/voice.ts
+@@ -0,0 +1,506 @@
++/**
++ * Durable voice-object storage and local ASR transcription, mirroring the
++ * content-addressed attachment layout below `DSH_HOME/attachments/v1`.
++ * [本地改造 2026-08-16] voice message support: browser recordings land in the
++ * same objects pool as images (sha256-addressed), then transcode to WAV for
++ * the local sherpa-onnx ASR service. A failed transcription never blocks the
++ * message — the block keeps no transcript and serialization degrades the copy.
++ * @module @deepseek-ai/dsh-host-apiproxy/voice
++ */
++
++import { createHash, randomUUID } from 'node:crypto'
++import { mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises'
++import { constants, readFileSync } from 'node:fs'
++import { homedir } from 'node:os'
++import { join, resolve } from 'node:path'
++import { spawn, spawnSync, execFileSync } from 'node:child_process'
++import type { VoiceAttachmentRef, VoiceMediaType } from './api/sessions.ts'
++import { edgeTts } from './edge-tts.ts'
++
++/** ASR media types accepted from the browser wire. */
++export const VOICE_MEDIA_TYPES: readonly VoiceMediaType[] = [
++  'audio/webm', 'audio/ogg', 'audio/mp4', 'audio/wav',
++]
++
++/** Maximum encoded bytes accepted for one voice object. */
++export const MAX_VOICE_BYTES = 25 * 1024 * 1024
++
++/** Absolute versioned storage root (same layout as the attachment backend). */
++export function voiceStorageRoot(configuredHome?: string): string {
++  const home = configuredHome ?? process.env.DSH_HOME ?? join(homedir(), '.dsh')
++  return resolve(join(home, 'attachments', 'v1'))
++}
++
++/** Resolve the absolute object path for one voice reference. */
++export function voiceObjectPath(root: string, voiceId: string): string {
++  return objectPath(root, voiceId.replace(/^sha256:/, ''))
++}
++
++function objectPath(root: string, sha256: string): string {
++  return join(root, 'objects', sha256.slice(0, 2), sha256)
++}
++
++/**
++ * Store immutable voice bytes below a versioned root, content-addressed by
++ * sha256 exactly like image objects. A concurrent duplicate write resolves to
++ * the existing object; a conflicting target with different bytes is an error.
++ * @param root - absolute `DSH_HOME/attachments/v1` root.
++ * @param data - encoded browser recording bytes.
++ * @param mediaType - declared recording container format.
++ * @param durationMs - optional recorder-reported length.
++ * @returns durable content-addressed reference.
++ */
++export async function saveVoiceFile(
++  root: string,
++  data: Uint8Array,
++  mediaType: VoiceMediaType,
++  durationMs?: number,
++): Promise<VoiceAttachmentRef> {
++  if (data.byteLength > MAX_VOICE_BYTES) {
++    throw new Error(`Voice object exceeds the ${MAX_VOICE_BYTES}-byte limit.`)
++  }
++  const sha256 = createHash('sha256').update(data).digest('hex')
++  const bucket = join(root, 'objects', sha256.slice(0, 2))
++  const target = objectPath(root, sha256)
++  await mkdir(bucket, { recursive: true, mode: 0o700 })
++  let handle
++  try {
++    handle = await open(target, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
++    await handle.writeFile(data)
++    await handle.close()
++    handle = undefined
++  } catch (error) {
++    if (handle !== undefined) await handle.close().catch(() => {})
++    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) {
++      throw new Error(`Unable to persist voice object: ${String(error)}`, { cause: error })
++    }
++    // A duplicate sha256 target already exists; its bytes are identical by
++    // construction, so the concurrent writer's object is the same object.
++  }
++  return {
++    voiceId: `sha256:${sha256}`,
++    mediaType,
++    bytes: data.byteLength,
++    ...(durationMs === undefined ? {} : { durationMs }),
++  }
++}
++
++/**
++ * Read one content-addressed voice object.
++ * @param root - absolute `DSH_HOME/attachments/v1` root.
++ * @param ref - reference recorded in the session log.
++ * @returns stored bytes and the reference.
++ */
++export async function readVoiceFile(root: string, ref: VoiceAttachmentRef): Promise<{ ref: VoiceAttachmentRef; data: Uint8Array }> {
++  const data = new Uint8Array(await readFile(voiceObjectPath(root, ref.voiceId)))
++  return { ref, data }
++}
++
++/** Default ffmpeg binary; overridable for non-Windows deployments. */
++export const FFMPEG_BIN = process.env.DSH_VOICE_FFMPEG_BIN
++  ?? 'C:\\Users\\oadan\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffmpeg.exe'
++
++/** Default local ASR endpoint (sherpa-onnx SenseVoice service). */
++export const ASR_SERVICE_URL = process.env.DSH_ASR_SERVICE_URL ?? 'http://127.0.0.1:18790/transcribe'
++
++/**
++ * 读取插件 dsh-host-voice 写入的 ~/.dsh/voice-config.json 的 ASR 配置，
++ * 让设置页的 ASR 模式（service / cmd / api）真正作用于后台自动识别主链路，
++ * 而不是永远硬编码打 18790。读取失败或无配置时返回 null，调用方退回默认
++ * 常驻服务，保持旧行为。
++ */
++interface AsrConfig {
++  enabled: boolean
++  mode: 'service' | 'cmd' | 'api'
++  url: string
++  cmd: string
++  apiKey: string
++  apiBaseUrl: string
++}
++
++function loadAsrConfig(): AsrConfig | null {
++  const path = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'voice-config.json')
++  try {
++    const parsed = JSON.parse(readFileSync(path, 'utf8'))
++    const asr = parsed?.engines?.asr
++    if (asr === undefined || asr === null || typeof asr !== 'object') return null
++    return {
++      enabled: asr.enabled !== false,
++      mode: asr.mode === 'cmd' || asr.mode === 'api' ? asr.mode : 'service',
++      url: typeof asr.url === 'string' && asr.url.trim() !== '' ? asr.url : 'http://127.0.0.1:18790',
++      cmd: typeof asr.cmd === 'string' ? asr.cmd : '',
++      apiKey: typeof asr.apiKey === 'string' ? asr.apiKey : '',
++      apiBaseUrl: typeof asr.apiBaseUrl === 'string' && asr.apiBaseUrl.trim() !== ''
++        ? asr.apiBaseUrl
++        : 'https://api.xiaomimimo.com/v1',
++    }
++  } catch {
++    return null
++  }
++}
++
++/**
++ * 转写一段录音。路由优先级：
++ *  1) 环境变量 DSH_ASR_SERVICE_URL（硬覆盖，保持旧行为，仍只认 service 风格 {audioPath}）；
++ *  2) 读 voice-config.json 的 engines.asr，按 mode 路由：
++ *     - cmd：本地命令（sherpa-onnx-offline.exe，结果在 stderr，合并双流解析 "text"）；
++ *     - api：在线 ASR（小米 mimo-v2.5-asr / OpenAI Whisper 兼容）；
++ *     - service（默认）：POST {audioPath} 到 asr.url/transcribe；
++ *  3) 无配置 / 未启用：退回默认常驻服务 18790。
++ * 浏览器容器（webm/ogg）先转 16kHz 单声道 WAV，sherpa 只认标准 wav。
++ * 识别失败绝不抛错，返回 '' 让调用方降级。
++ * @param audioPath - 已落盘录音的绝对路径。
++ * @returns 识别文本，或 ''（服务不可用 / 失败）。
++ */
++export async function transcribeVoice(audioPath: string): Promise<string> {
++  let wavPath: string | undefined
++  const controller = new AbortController()
++  const timer = setTimeout(() => { controller.abort() }, 35_000)
++  try {
++    wavPath = await transcodeToWav(audioPath)
++    // 1) 环境变量硬覆盖（保持旧行为）
++    const envUrl = process.env.DSH_ASR_SERVICE_URL
++    if (envUrl !== undefined && envUrl.trim() !== '') {
++      const response = await fetch(envUrl, {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ audioPath: wavPath }),
++        signal: controller.signal,
++      })
++      if (!response.ok) return ''
++      const payload = await response.json() as { text?: unknown }
++      return typeof payload.text === 'string' ? payload.text : ''
++    }
++    // 2) 读插件配置，按 asr.mode 路由
++    const asr = loadAsrConfig()
++    if (asr === null || !asr.enabled) {
++      const response = await fetch(ASR_SERVICE_URL, {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ audioPath: wavPath }),
++        signal: controller.signal,
++      })
++      if (!response.ok) return ''
++      const payload = await response.json() as { text?: unknown }
++      return typeof payload.text === 'string' ? payload.text : ''
++    }
++    if (asr.mode === 'cmd') {
++      // [本地改造 2026-08-21] cmd 模式缺命令配置 = 明确失败，绝不降级到常驻服务
++      if (asr.cmd.trim() === '') {
++        console.error('[asr] cmd 模式但未配置本地命令，识别失败（不降级常驻服务）')
++        return ''
++      }
++      const parts = asr.cmd.trim().split(/\s+/)
++      const bin = parts[0]
++      if (bin !== undefined) {
++        const result = spawnSync(bin, [...parts.slice(1), wavPath], {
++          windowsHide: true,
++          encoding: 'utf-8',
++          timeout: 60_000,
++          stdio: ['ignore', 'pipe', 'pipe'],
++        })
++        const all = (result.stdout ?? '') + '\n' + (result.stderr ?? '')
++        const m = all.match(/"text"\s*:\s*"([^"]*)"/)
++        return (m?.[1] ?? '').trim()
++      }
++      return ''
++    }
++    if (asr.mode === 'api') {
++      // [本地改造 2026-08-21] api 模式缺 key = 明确失败，绝不降级到常驻服务
++      if (asr.apiKey.trim() === '') {
++        console.error('[asr] api 模式但未配置 API Key，识别失败（不降级常驻服务）')
++        return ''
++      }
++      const apiKey = asr.apiKey.trim()
++      const baseUrl = asr.apiBaseUrl.replace(/\/+$/, '')
++      const audioBase64 = (await readFile(audioPath)).toString('base64')
++      if (baseUrl.includes('openai')) {
++        const form = new FormData()
++        const blob = new Blob([Buffer.from(audioBase64, 'base64')], { type: 'audio/wav' })
++        form.append('file', blob, 'audio.wav')
++        form.append('model', 'whisper-1')
++        const response = await fetch(`${baseUrl}/audio/transcriptions`, {
++          method: 'POST',
++          headers: { Authorization: `Bearer ${apiKey}` },
++          body: form,
++          signal: controller.signal,
++        })
++        if (!response.ok) return ''
++        const payload = await response.json() as { text?: unknown }
++        return typeof payload.text === 'string' ? payload.text.trim() : ''
++      }
++      const response = await fetch(`${baseUrl}/chat/completions`, {
++        method: 'POST',
++        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
++        body: JSON.stringify({
++          model: 'mimo-v2.5-asr',
++          messages: [
++            {
++              role: 'user',
++              content: [
++                { type: 'input_audio', input_audio: { data: `data:audio/wav;base64,${audioBase64}` } },
++              ],
++            },
++          ],
++          extra_body: { asr_options: { language: 'auto' } },
++        }),
++        signal: controller.signal,
++      })
++      if (!response.ok) return ''
++      const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> }
++      const text = typeof payload.choices?.[0]?.message?.content === 'string'
++        ? payload.choices[0].message.content.trim()
++        : ''
++      return text
++    }
++    // 3) service 模式（默认）：POST {audioPath} 到 asr.url/transcribe
++    const baseUrl = asr.url.trim().replace(/\/+$/, '')
++    const response = await fetch(`${baseUrl}/transcribe`, {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({ audioPath: wavPath }),
++      signal: controller.signal,
++    })
++    if (!response.ok) return ''
++    const payload = await response.json() as { text?: unknown }
++    return typeof payload.text === 'string' ? payload.text : ''
++  } catch {
++    return ''
++  } finally {
++    clearTimeout(timer)
++    if (wavPath !== undefined) await unlink(wavPath).catch(() => {})
++  }
++}
++
++/** Transcode any container ffmpeg decodes to 16 kHz mono PCM WAV in the temp dir. */
++function transcodeToWav(inputPath: string): Promise<string> {
++  const wavPath = join(process.env.TEMP ?? '/tmp', `dsh-asr-${randomUUID()}.wav`)
++  return new Promise((resolveWav, reject) => {
++    const child = spawn(FFMPEG_BIN, [
++      '-i', inputPath,
++      '-ar', '16000', '-ac', '1',
++      '-c:a', 'pcm_s16le',
++      '-y', wavPath,
++    ], { windowsHide: true, stdio: 'ignore' })
++    const timer = setTimeout(() => {
++      child.kill()
++      reject(new Error('ffmpeg transcode timed out.'))
++    }, 30_000)
++    child.once('error', (error) => {
++      clearTimeout(timer)
++      reject(error)
++    })
++    child.once('close', (code) => {
++      clearTimeout(timer)
++      if (code === 0) resolveWav(wavPath)
++      else reject(new Error(`ffmpeg exited with code ${code ?? 'null'}.`))
++    })
++  })
++}
++
++export interface SynthesizedVoice {
++  mediaType: string
++  data: Uint8Array
++  durationMs?: number
++}
++
++/**
++ * Synthesize reply voice through self-contained engines（TTS 独立化，不依赖 agents-to-im）：
++ *  - auto/edge：微软 Edge TTS（免费无 key，WebSocket，开箱即用）
++ *  - xiaomi：小米 MiMo TTS（HTTP 直连，需 TTS_XIAOMI_KEY 环境变量；文本 (唱歌) 标签触发唱歌）
++ *  - local：本地 TTS 命令（DSH_LOCAL_TTS_CMD，文本作末参，stdout 输出音频）
++ * 输出统一转 mp3（浏览器全兼容）。Never throws — returns null on failure.
++ * @param text - reply text to speak.
++ * @param provider - engine override (auto/edge/xiaomi/local; unknown falls back to edge).
++ * @returns encoded audio, or null when synthesis or reading failed.
++ */
++export async function synthesizeReplyVoice(text: string, provider?: string): Promise<SynthesizedVoice | null> {
++  const speak = stripMarkdown(text)
++  const engine = provider ?? 'auto'
++  try {
++    if (engine === 'xiaomi') return await synthesizeXiaomiVoice(speak)
++    if (engine === 'local') return await synthesizeLocalVoice(speak)
++    // [本地改造 2026-08-17] 默认（auto）优先小米 MiMo（用户配置），key 缺失/合成失败时降级微软 edge
++    if (engine === 'auto') {
++      const xiaomi = await synthesizeXiaomiVoice(speak)
++      if (xiaomi !== null) return xiaomi
++    }
++    return await synthesizeEdgeVoice(speak)
++  } catch {
++    return null
++  }
++}
++
++/** 微软 Edge TTS（免费）：输出即 mp3，无需转码。 */
++async function synthesizeEdgeVoice(text: string): Promise<SynthesizedVoice | null> {
++  const voice = process.env.TTS_EDGE_VOICE ?? 'zh-CN-XiaoxiaoNeural'
++  const mp3 = await edgeTts(text, voice)
++  return toMp3(new Uint8Array(mp3), 'audio/mpeg')
++}
++
++/** 小米 MiMo TTS：HTTP 直连 api.xiaomimimo.com（key/音色从环境变量读，不碰外部配置文件）。 */
++async function synthesizeXiaomiVoice(text: string): Promise<SynthesizedVoice | null> {
++  const apiKey = process.env.TTS_XIAOMI_KEY ?? ''
++  // [tts-debug] 定位小米失败：打印 key 是否存在 + HTTP 状态
++  console.error(`[tts-debug] xiaomi key=${apiKey === '' ? 'MISSING' : 'present'} env=${Object.keys(process.env).filter(k => /TTS|XIAOMI/i.test(k)).join(',') || 'none'}`)
++  if (apiKey === '') return null
++  const baseUrl = process.env.TTS_XIAOMI_BASE_URL ?? 'https://api.xiaomimimo.com/v1'
++  const voice = process.env.TTS_XIAOMI_VOICE ?? 'mimo_default'
++  const response = await fetch(`${baseUrl}/chat/completions`, {
++    method: 'POST',
++    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
++    body: JSON.stringify({
++      model: 'mimo-v2.5-tts',
++      messages: [
++        { role: 'user', content: '把下面的文字转成语音' },
++        { role: 'assistant', content: text },
++      ],
++      max_tokens: 8192,
++      speed: 1.0,
++      voice,
++      audio: { format: 'wav' },
++    }),
++  })
++  console.error(`[tts-debug] xiaomi http=${response.status}`)
++  if (!response.ok) return null
++  const payload = await response.json() as { choices?: Array<{ message?: { audio?: { data?: unknown } } }> }
++  const data = payload.choices?.[0]?.message?.audio?.data
++  if (typeof data !== 'string' || data.length < 100) return null
++  return toMp3(new Uint8Array(Buffer.from(data, 'base64')), 'audio/wav')
++}
++
++/** 本地 TTS 命令（可插拔）：spawn DSH_LOCAL_TTS_CMD，文本作末参，stdout 收音频字节。 */
++async function synthesizeLocalVoice(text: string): Promise<SynthesizedVoice | null> {
++  const command = process.env.DSH_LOCAL_TTS_CMD ?? ''
++  if (command === '') return null
++  const parts = command.split(/\s+/)
++  const bin = parts[0]
++  if (bin === undefined) return null
++  const rest = parts.slice(1)
++  const audio = execFileSync(bin, [...rest, text], {
++    windowsHide: true,
++    encoding: 'buffer',
++    timeout: 60_000,
++  }) as Buffer
++  return toMp3(new Uint8Array(audio), 'audio/mpeg')
++}
++
++/** 统一转 mp3：已是 mp3 直接返回；wav/其他容器用 ffmpeg 转（失败保留原格式）。 */
++async function toMp3(data: Uint8Array, declared: string): Promise<SynthesizedVoice | null> {
++  const isMp3 = data.length > 2 && data[0] === 0xFF && ((data[1] ?? 0) & 0xE0) === 0xE0
++  let finalData = data
++  let mediaType = declared
++  if (!isMp3) {
++    const tmpIn = join(process.env.TEMP ?? '/tmp', `dsh-tts-in-${randomUUID()}.wav`)
++    const mp3Path = join(process.env.TEMP ?? '/tmp', `dsh-tts-${randomUUID()}.mp3`)
++    await writeFile(tmpIn, data)
++    try {
++      execFileSync(FFMPEG_BIN, ['-y', '-i', tmpIn, '-c:a', 'libmp3lame', '-b:a', '128k', mp3Path], {
++        windowsHide: true, stdio: 'ignore', timeout: 30_000,
++      })
++      finalData = new Uint8Array(await readFile(mp3Path))
++      mediaType = 'audio/mpeg'
++    } catch {
++      // 转码失败保留原容器（部分浏览器仍可播）。
++    } finally {
++      await unlink(tmpIn).catch(() => {})
++      await unlink(mp3Path).catch(() => {})
++    }
++  }
++  const durationMs = estimateAudioDurationMs(finalData)
++  return {
++    mediaType,
++    data: finalData,
++    ...(durationMs === undefined ? {} : { durationMs }),
++  }
++}
++
++/** True when the leading bytes are an Ogg container (OggS magic). */
++function looksLikeOgg(data: Uint8Array): boolean {
++  return data.length >= 4
++    && data[0] === 0x4F && data[1] === 0x67 && data[2] === 0x67 && data[3] === 0x53 // 'OggS'
++}
++
++/**
++ * [本地改造 2026-08-16] Strip Markdown syntax for TTS reading: headings, bold/
++ * italic markers, inline code, links, tables, lists, and dividers become plain
++ * readable text. Multi-line output is joined with spaces so the engine speaks
++ * it fluently.
++ */
++function stripMarkdown(text: string): string {
++  return text
++    .replace(/```[\s\S]*?```/g, ' ')            // fenced code blocks
++    .replace(/`([^`]+)`/g, '$1')                  // inline code
++    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')      // links: keep label
++    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')     // images: keep alt
++    .replace(/^#{1,6}\s*/gm, '')                  // ATX headings
++    .replace(/^>+\s*/gm, '')                      // blockquotes
++    .replace(/^\s*[-*+]\s+/gm, '')                // list bullets
++    .replace(/^\s*\d+[.)]\s+/gm, '')              // numbered lists
++    .replace(/^\s*\|?[\s:|-]+\|?\s*$/gm, '')      // table separator rows (| --- | --- |)
++    .replace(/^[-*_]{3,}\s*$/gm, '')              // horizontal rules
++    .replace(/\|/g, ' ')                          // table pipes
++    .replace(/\*\*([^*]+)\*\*/g, '$1')            // bold
++    .replace(/\*([^*]+)\*/g, '$1')                // italic
++    .replace(/__([^_]+)__/g, '$1')                // bold underscore
++    .replace(/_([^_]+)_/g, '$1')                  // italic underscore
++    .replace(/~~([^~]+)~~/g, '$1')                // strikethrough
++    .replace(/^\s*[-*_]\s*$/gm, '')               // lone dash rows
++    .replace(/\s*\n\s*/g, ' ')                    // newlines → space (fluent speech)
++    .replace(/\s{2,}/g, ' ')
++    .trim()
++}
++
++/**
++ * Approximate audio duration for the reply pill. ffprobe is authoritative when
++ * available (any container); otherwise falls back to a container-aware byte
++ * estimate. Exact decode is overkill here — a second count is enough.
++ * @param data - encoded audio bytes.
++ * @param path - absolute produced-file path (ffprobe input).
++ * @returns estimated duration in ms, or undefined when unreadable.
++ */
++function estimateAudioDurationMs(data: Uint8Array, path?: string): number | undefined {
++  if (path !== undefined) {
++    try {
++      const ffprobe = process.env.DSH_VOICE_FFPROBE_BIN
++        ?? 'C:\\Users\\oadan\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffprobe.exe'
++      const out = execFileSync(ffprobe, [
++        '-v', 'error', '-show_entries', 'format=duration',
++        '-of', 'default=noprint_wrappers=1:nokey=1', path,
++      ], { encoding: 'utf8', windowsHide: true, timeout: 10_000 }).trim()
++      const seconds = Number.parseFloat(out)
++      if (Number.isFinite(seconds) && seconds > 0) return Math.round(seconds * 1000)
++    } catch {
++      // ffprobe unavailable or failed; fall through to the byte estimate.
++    }
++  }
++  if (looksLikeOgg(data)) {
++    // Ogg/Opus at the standard 48 kHz; a 12-byte frame carries 20ms (i.e. 600
++    // bytes/s) — the bitrate heuristic below would grossly overestimate, so
++    // give a rough constant bitrate guess instead.
++    const kbps = 48
++    return Math.round(data.length / (kbps * 1000 / 8) * 1000)
++  }
++  // MP3: skip a leading ID3v2 tag (its binary metadata can fake a frame sync),
++  // then use the first real frame's bitrate.
++  let offset = 0
++  if (data.length >= 10 && (data[0] ?? 0) === 0x49 && (data[1] ?? 0) === 0x44 && (data[2] ?? 0) === 0x33 // 'ID3'
++    && ((data[3] ?? 0) & 0xFF) < 0xFF && ((data[4] ?? 0) & 0xFF) < 0xFF) {
++    const size = (((data[6] ?? 0) & 0x7F) << 21) | (((data[7] ?? 0) & 0x7F) << 14)
++      | (((data[8] ?? 0) & 0x7F) << 7) | ((data[9] ?? 0) & 0x7F)
++    offset = 10 + size
++  }
++  while (offset + 4 <= data.length) {
++    const sync = ((data[offset] ?? 0) << 8) | (data[offset + 1] ?? 0)
++    if ((sync & 0xFFE0) === 0xFFE0) {
++      const bitrateIndex = ((data[offset + 2] ?? 0) >>> 4) & 0x0F
++      const sampleRateIndex = ((data[offset + 2] ?? 0) >>> 2) & 0x03
++      if (bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) return undefined
++      const bitrates = [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
++      const kbps = bitrates[bitrateIndex - 1] ?? 128
++      return Math.round((data.length - offset) / (kbps * 1000 / 8) * 1000)
++    }
++    offset += 1
++  }
++  return undefined
++}
+diff --git a/packages/host/apiproxy/tests/api-proxy-blank.spec.ts b/packages/host/apiproxy/tests/api-proxy-blank.spec.ts
+index 1ee3a5100f..579c259f02 100644
+--- a/packages/host/apiproxy/tests/api-proxy-blank.spec.ts
++++ b/packages/host/apiproxy/tests/api-proxy-blank.spec.ts
+@@ -48,7 +48,7 @@ function appendStandalone(session: Session): void {
+     commandId: CommandId('blank-cmd-1'), name: 'plan', args: '', source: { kind: 'user' },
+   })
+   session.append('plan/mode', { active: true })
+-  session.append('command/done', { commandId: CommandId('blank-cmd-1'), kind: 'success', text: 'Plan mode on.' })
++  session.append('command/done', { commandId: CommandId('blank-cmd-1'), kind: 'success', text: '计划模式已开启。' })
+   session.append('session/title', {
+     title: 'standalone title', messageSeqs: [], source: { kind: 'fallback' },
+   })
+diff --git a/packages/host/apiproxy/tests/client-handler.spec.ts b/packages/host/apiproxy/tests/client-handler.spec.ts
+index de9d4ddab0..9bc48d8ae1 100644
+--- a/packages/host/apiproxy/tests/client-handler.spec.ts
++++ b/packages/host/apiproxy/tests/client-handler.spec.ts
+@@ -28,6 +28,7 @@ function scriptedApi(overrides: {
+   settings?: Partial<ApiProxy['settings']>
+   credentials?: Partial<ApiProxy['credentials']>
+   llm?: Partial<ApiProxy['llm']>
++  balance?: Partial<ApiProxy['balance']>
+   respond?: ApiProxy['respond']
+ } = {}): ApiProxy {
+   async function *empty<F>(): AsyncGenerator<RpcRequest<F>> { /* no frames */ }
+@@ -59,6 +60,13 @@ function scriptedApi(overrides: {
+         attachment: { attachmentId: 'a' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
+         data: 'AA==',
+       }),
++      voice: r => ok(r, {
++        attachment: { voiceId: 'v', mediaType: 'audio/webm', bytes: 1 },
++        data: 'AA==',
++      }),
++      voiceAsr: r => ok(r, { text: 'stub transcription' }),
++      voiceTts: r => ok(r, { mediaType: 'audio/mpeg', data: 'SUQz', durationMs: 800 }),
++      sendVoiceMessage: r => ok(r, { accepted: true as const }),
+       updateQueue: r => ok(r, { accepted: true as const }),
+       cancel: r => ok(r, { accepted: true as const }),
+       ...overrides.sessions,
+@@ -128,6 +136,9 @@ function scriptedApi(overrides: {
+       discoverModels: err,
+       ...overrides.llm,
+     },
++    balance: {
++      get: r => ok(r, { balance: null }),
++    },
+     events: { mux: () => empty<MuxFrame>(), host: () => empty<HostFrame>(), ...overrides.events },
+     respond: overrides.respond ?? (() => Promise.resolve({ accepted: false as const, reason: 'not-pending' as const })),
+     downloads: { sessionLog: async () => new Response('stub', { status: 404 }) },
+diff --git a/packages/host/apiproxy/tests/fetch-carrier.spec.ts b/packages/host/apiproxy/tests/fetch-carrier.spec.ts
+index 77432c55af..6e2bfb5da4 100644
+--- a/packages/host/apiproxy/tests/fetch-carrier.spec.ts
++++ b/packages/host/apiproxy/tests/fetch-carrier.spec.ts
+@@ -102,6 +102,21 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
+           result: { ok: true, value: { attachment: { attachmentId: 'a' as never, mediaType: 'image/png' as const, bytes: 1, width: 1, height: 1 }, data: 'AA==' } },
+         }
+       },
++      async voice(request) {
++        return {
++          rpcId: request.rpcId,
++          result: { ok: true, value: { attachment: { voiceId: 'v', mediaType: 'audio/webm' as const, bytes: 1 }, data: 'AA==' } },
++        }
++      },
++      async voiceAsr(request) {
++        return { rpcId: request.rpcId, result: { ok: true, value: { text: 'stub transcription' } } }
++      },
++      async voiceTts(request) {
++        return { rpcId: request.rpcId, result: { ok: true, value: { mediaType: 'audio/mpeg', data: 'SUQz', durationMs: 800 } } }
++      },
++      async sendVoiceMessage(request) {
++        return { rpcId: request.rpcId, result: { ok: true, value: { accepted: true as const } } }
++      },
+       async updateQueue(request) {
+         return { rpcId: request.rpcId, result: { ok: true, value: { accepted: true as const } } }
+       },
+@@ -282,6 +297,11 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
+         return { rpcId: request.rpcId, result: { ok: true, value: { models: [] } } }
+       },
+     },
++    balance: {
++      async get(request) {
++        return { rpcId: request.rpcId, result: { ok: true, value: { balance: null } } }
++      },
++    },
+     events: {
+       mux: (_request, signal) => stream(muxFrames, signal),
+       host: (_request, signal) => stream(hostFrames, signal),
+diff --git a/packages/host/directory-picker-auto/src/resolve.ts b/packages/host/directory-picker-auto/src/resolve.ts
+index 395e2da55f..d1548d4961 100644
+--- a/packages/host/directory-picker-auto/src/resolve.ts
++++ b/packages/host/directory-picker-auto/src/resolve.ts
+@@ -13,7 +13,7 @@ export type DirectoryPickerBackendKind = 'native' | 'browse'
+ 
+ /** Environment keys the resolution reads (a `process.env` subset). */
+ export type DirectoryPickerEnv = Readonly<
+-  Partial<Record<'SSH_CONNECTION' | 'SSH_TTY' | 'DISPLAY' | 'WAYLAND_DISPLAY', string>>
++  Partial<Record<'SSH_CONNECTION' | 'SSH_TTY' | 'DISPLAY' | 'WAYLAND_DISPLAY' | 'DSH_FORCE_BROWSE_PICKER', string>>
+ >
+ 
+ /** Host facts the backend choice is a pure function of, sampled once at boot. */
+@@ -45,6 +45,10 @@ const present = (value: string | undefined): boolean => value !== undefined && v
+  * @returns the backend kind to mount.
+  */
+ export function resolveDirectoryPickerBackend(facts: DirectoryPickerHostFacts): DirectoryPickerBackendKind {
++  // [本地改造 2026-08-13] DSH_FORCE_BROWSE_PICKER=1 → 强制 browse（浏览器目录树）：
++  // Windows nssm 服务跑在 session 0，原生 IFileOpenDialog COM 对话框无交互桌面
++  // 弹不出（pick 卡死）。browse 是纯 HTTP 目录列表，session 0 完全可用。
++  if (facts.env.DSH_FORCE_BROWSE_PICKER === '1') return 'browse'
+   if (facts.bindHost !== '127.0.0.1') return 'browse'
+   if (present(facts.env.SSH_CONNECTION) || present(facts.env.SSH_TTY)) return 'browse'
+   if (facts.platform === 'darwin' || facts.platform === 'win32') return 'native'
+diff --git a/packages/llm/llm-deepseek/src/serialize.ts b/packages/llm/llm-deepseek/src/serialize.ts
+index 498b3fb2f7..a5e8458366 100644
+--- a/packages/llm/llm-deepseek/src/serialize.ts
++++ b/packages/llm/llm-deepseek/src/serialize.ts
+@@ -17,6 +17,7 @@ import type {
+   WireTool,
+   WireUserContentPart,
+ } from './types.ts'
++import { join } from 'node:path'
+ 
+ /** Adapter-level request defaults (from plugin config). */
+ export interface RequestDefaults {
+@@ -79,11 +80,58 @@ function flattenText(blocks: ContentBlock[]): string {
+     .join('')
+ }
+ 
+-/** Reject core image content before any text-flattening path can silently erase it. */
+-function assertTextOnly(blocks: readonly ContentBlock[]): void {
+-  if (contentHasImage(blocks)) {
+-    throw new LlmError('The DeepSeek chat-completions adapter does not support image content.', 'UNSUPPORTED_CONTENT')
++/** [本地改造 2026-08-16] 把 image 块转成含本地附件路径的文本（参考 dsh-vscode-layout 补丁）：
++ * 文本模型收到路径后，必须通过视觉 MCP（mcp__visionqa__look / mcp__zai-vision__analyze_image）
++ * 识图；该文件无扩展名，read_image 等按扩展名校验的工具会拒绝，禁止使用。 */
++function imageAsText(block: ContentBlock): ContentBlock {
++  const ref = (block as { attachment?: { attachmentId?: unknown; name?: string; mediaType?: string } }).attachment
++  const rawId = typeof ref?.attachmentId === 'string' ? ref.attachmentId : ''
++  const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
++  const name = typeof ref?.name === 'string' && ref.name.length > 0 ? ref.name : 'image'
++  const mediaType = ref?.mediaType ?? 'image/jpeg'
++  const home = process.env.DSH_HOME ?? ''
++  const path = hex.length > 0 && home !== ''
++    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
++    : '(unknown)'
++  return { type: 'text', text: `[用户发送了一张图片，名称 "${name}"，类型 ${mediaType}。请用视觉 MCP 工具识图（mcp__visionqa__look 或 mcp__zai-vision__analyze_image，传入 image_path），不要用 read_image（该文件无扩展名，read_image 会拒绝）：${path}]` }
++}
++
++function imagesAsText(blocks: readonly ContentBlock[]): ContentBlock[] {
++  return blocks.map((block) => {
++    if (block.type === 'image') return imageAsText(block)
++    if (block.type === 'tool-result') return { ...block, content: imagesAsText(block.content) }
++    return block
++  })
++}
++
++/** [本地改造 2026-08-16] 把 voice 块转成文本：attachment.transcript 存在时直接给出
++ * 识别文本（旧宿主链路兼容）；否则输出本地语音文件路径——agent 收到路径后主动调
++ * 本地 ASR 服务识别（与图片走视觉 MCP 同一模式），识别结果显示在助手侧。 */
++function voiceAsText(block: ContentBlock): ContentBlock {
++  const ref = (block as { attachment?: { voiceId?: unknown; durationMs?: unknown; transcript?: unknown } }).attachment
++  const rawId = typeof ref?.voiceId === 'string' ? ref.voiceId : ''
++  const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
++  const transcript = typeof ref?.transcript === 'string' && ref.transcript.length > 0
++    ? ref.transcript
++    : null
++  const durationMs = typeof ref?.durationMs === 'number' ? ref.durationMs : null
++  const duration = durationMs === null ? '' : `（时长 ${Math.round(durationMs / 1000)} 秒）`
++  if (transcript !== null) {
++    return { type: 'text', text: `[用户发送了一条语音${duration}，识别内容：${transcript}]` }
+   }
++  const home = process.env.DSH_HOME ?? ''
++  const path = hex.length > 0 && home !== ''
++    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
++    : '(unknown)'
++  return { type: 'text', text: `[用户发送了一条语音${duration}，本地语音文件路径: ${path}]` }
++}
++
++function voicesAsText(blocks: readonly ContentBlock[]): ContentBlock[] {
++  return blocks.map((block) => {
++    if (block.type === 'voice') return voiceAsText(block)
++    if (block.type === 'tool-result') return { ...block, content: voicesAsText(block.content) }
++    return block
++  })
+ }
+ 
+ /** Reject roles whose DeepSeek history format cannot carry image input. */
+@@ -203,19 +251,22 @@ function serializeAssistant(message: Message): WireMessage {
+ export function serializeMessages(messages: Message[]): WireMessage[] {
+   const wire: WireMessage[] = []
+   for (const message of messages) {
+-    assertTextOnly(message.content)
++    // [本地改造 2026-08-16] 图片块先转本地路径文本（imagesAsText），agent 用视觉 MCP 识图；
++    // 语音块同样转本地路径文本（voicesAsText），agent 用本地 ASR 服务识别——识别结果
++    // 以工具输出显示在助手侧（与识图同一模式），host 不再二次注入识别文本。
++    const content = voicesAsText(imagesAsText(message.content))
+     if (message.role === 'system') {
+-      wire.push({ role: 'system', content: flattenText(message.content) })
++      wire.push({ role: 'system', content: flattenText(content) })
+       continue
+     }
+     if (message.role === 'assistant') {
+-      wire.push(serializeAssistant(message))
++      wire.push(serializeAssistant({ ...message, content }))
+       continue
+     }
+     // user role: tool results ride in user messages in the harness
+     // vocabulary, but DeepSeek wants them as role:'tool' messages.
+-    const toolResults = message.content.filter(block => block.type === 'tool-result')
+-    const text = flattenText(message.content)
++    const toolResults = content.filter(block => block.type === 'tool-result')
++    const text = flattenText(content)
+     if (text.length > 0 || toolResults.length === 0) {
+       wire.push({ role: 'user', content: text })
+     }
+diff --git a/packages/llm/llm/src/types.ts b/packages/llm/llm/src/types.ts
+index 8c5be187dd..750496f164 100644
+--- a/packages/llm/llm/src/types.ts
++++ b/packages/llm/llm/src/types.ts
+@@ -74,6 +74,29 @@ export interface ImageBlock {
+   attachment: ImageAttachmentRef
+ }
+ 
++/**
++ * A durable voice recording reference, valid in user content today. The host
++ * persists the browser-uploaded bytes content-addressed beside image objects
++ * and transcribes them through the local ASR service; the transcript rides the
++ * reference so serialization can degrade cleanly when recognition fails.
++ */
++export interface VoiceBlock {
++  type: 'voice'
++  /** Immutable bytes and recognition metadata for one recording. */
++  attachment: {
++    /** Opaque storage identifier; never a filesystem path or bearer URL. */
++    voiceId: string
++    /** Recording container format from the browser wire (audio/mpeg added for TTS replies). */
++    mediaType: 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/wav' | 'audio/mpeg'
++    /** Exact encoded byte length. */
++    bytes: number
++    /** Recorder-reported length in milliseconds. */
++    durationMs?: number
++    /** Local ASR transcript; absent when recognition failed or is unavailable. */
++    transcript?: string
++  }
++}
++
+ /** A tool invocation requested by the model. */
+ export interface ToolCallBlock {
+   type: 'tool-call'
+@@ -100,6 +123,7 @@ export interface ContentBlockMap {
+   'text': TextBlock
+   'reasoning': ReasoningBlock
+   'image': ImageBlock
++  'voice': VoiceBlock
+   'tool-call': ToolCallBlock
+   'tool-result': ToolResultBlock
+ }
+diff --git a/packages/subprocess/subprocess-local/src/spawn.ts b/packages/subprocess/subprocess-local/src/spawn.ts
+index 433ba01791..328f987893 100644
+--- a/packages/subprocess/subprocess-local/src/spawn.ts
++++ b/packages/subprocess/subprocess-local/src/spawn.ts
+@@ -275,10 +275,18 @@ export function killGroup(pid: number, sig: NodeJS.Signals): void {
+  */
+ export function taskkillProcessTree(pid: number): void {
+   if (pid <= 0) return
+-  // Outcome deliberately unchecked: an already-absent tree (status 128), exit
+-  // races, and a missing taskkill binary (spawnSync reports, never throws) are
+-  // as tolerable here as ESRCH is for a POSIX group signal.
+-  spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
++  // [本地改造 2026-08-16] taskkill 优先用 System32 全路径：nssm 服务的 PATH 快照
++  // 曾缺 System32，导致 spawnSync('taskkill') ENOENT 静默失败、挂起进程永远杀不掉
++  // （超时/停止全部失效）。全路径 + PATH 兜底双保险。
++  const root = process.env.SystemRoot ?? 'C:\\Windows'
++  const candidates = [join(root, 'System32', 'taskkill.exe'), 'taskkill']
++  for (const command of candidates) {
++    // Outcome deliberately unchecked: an already-absent tree (status 128), exit
++    // races, and a missing taskkill binary (spawnSync reports, never throws) are
++    // as tolerable here as ESRCH is for a POSIX group signal.
++    const result = spawnSync(command, ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
++    if (result.error === undefined || (result.error as NodeJS.ErrnoException).code !== 'ENOENT') break
++  }
+ }
+ 
+ /**
