@@ -11,7 +11,7 @@ import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts
 import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-runtime/client'
 import type { VoiceAttachmentRef } from '@deepseek-ai/dsh-client-connection/client'
 import type { ChatNodeViewProps } from '../src/client/contract/slots.ts'
-import { UserMessageNodeView } from '../src/client/chat/MessageItem.tsx'
+import { UserMessageNodeView, type UserMessageNodeViewProps } from '../src/client/chat/MessageItem.tsx'
 import { zh } from '../src/client/locales.ts'
 
 const t: ChatNodeViewProps['t'] = makeTranslate(zh, commonZh)
@@ -58,18 +58,18 @@ afterEach(() => {
 
 describe('UserMessageNodeView voice card', () => {
   it('renders a play control with the recorder-reported duration', () => {
-    const view = render(<UserMessageNodeView {...voiceProps({
+    const view = render(<UserMessageNodeView {...(voiceProps({
       voiceId: 'sha256:v', mediaType: 'audio/webm', bytes: 100, durationMs: 4200,
-    }, vi.fn(() => Promise.resolve('blob:voice')))} />)
+    }, vi.fn(() => Promise.resolve('blob:voice'))) as unknown as UserMessageNodeViewProps)} />)
     expect(view.getByLabelText('播放语音')).toBeTruthy()
     expect(view.getByText('5s')).toBeTruthy()
   })
 
   it('loads the session-authorized bytes and plays on click', async () => {
     const load = vi.fn(() => Promise.resolve('blob:voice'))
-    const view = render(<UserMessageNodeView {...voiceProps({
+    const view = render(<UserMessageNodeView {...(voiceProps({
       voiceId: 'sha256:v', mediaType: 'audio/webm', bytes: 100, durationMs: 1200,
-    }, load)} />)
+    }, load) as unknown as UserMessageNodeViewProps)} />)
     await waitFor(() => expect(view.container.querySelector('audio')).not.toBeNull())
     expect(load).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'sha256:v' }))
     const audio = view.container.querySelector('audio') as HTMLAudioElement
@@ -84,9 +84,9 @@ describe('UserMessageNodeView voice card', () => {
   })
 
   it('disables the control when loading fails', async () => {
-    const view = render(<UserMessageNodeView {...voiceProps({
+    const view = render(<UserMessageNodeView {...(voiceProps({
       voiceId: 'sha256:v', mediaType: 'audio/webm', bytes: 100,
-    }, vi.fn(() => Promise.reject(new Error('boom'))))} />)
+    }, vi.fn(() => Promise.reject(new Error('boom')))) as unknown as UserMessageNodeViewProps)} />)
     const button = view.getByLabelText('播放语音') as HTMLButtonElement
     await waitFor(() => expect(button.disabled).toBe(true))
   })

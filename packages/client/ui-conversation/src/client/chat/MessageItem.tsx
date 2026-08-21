@@ -483,7 +483,7 @@ export function PendingSteeringBubble({ content, renderMessageImages, loadVoice,
 }
 
 /** User and admitted-steering keyed Chat renderer. */
-type UserMessageNodeViewProps = ChatNodeViewProps<'user' | 'steering'>
+export type UserMessageNodeViewProps = ChatNodeViewProps<'user' | 'steering'>
   & PropsRenderSlots<'conversation.chat.user-actions' | 'conversation.chat.voice-actions'>
 
 export const UserMessageNodeView = memo(function UserMessageNodeView({
