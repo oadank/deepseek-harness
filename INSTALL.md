@@ -56,6 +56,17 @@ node --import tsx/esm apps/cli/src/bin.ts web --no-open --port 3080
 
 需要 [nssm](https://nssm.cc)（`winget install nssm`）。
 
+### 推荐：一键脚本（自动处理所有坑，不会填错）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup-service.ps1
+```
+
+脚本自动完成：查 node 真实路径 → 设 DSH_HOME 为你的数据目录 → 配日志 → 注册并启动服务。
+远程访问时加参数：`-TrustedHosts "你的域名.ts.net,你的IP"`。
+
+### 手动方式（了解原理用）
+
 ```powershell
 # 1) 查你的 node 真实路径（不要猜，用命令查）：
 (Get-Command node).Source
