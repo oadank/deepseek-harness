@@ -236,19 +236,20 @@ export class DeepSeekAdapter extends LlmAdapter {
     let attachments: AttachmentStore | undefined
     if (hasImages) {
       const model = connection.models.find(entry => entry.id === options.model)
-      if (model?.inputModalities?.includes('image') !== true) {
-        throw new LlmError(
-          `DeepSeek model "${options.model}" does not accept image input.`,
-          'UNSUPPORTED_CONTENT',
-        )
+      if (model?.inputModalities?.includes('image') === true) {
+        // 多模态模型：走附件转换（图片转 base64 附件随请求发送）
+        attachments = this.config.resolveAttachments?.()
+        if (attachments === undefined) {
+          throw new LlmError(
+            'DeepSeek image conversion requires the durable attachment service.',
+            'UNSUPPORTED_CONTENT',
+          )
+        }
       }
-      attachments = this.config.resolveAttachments?.()
-      if (attachments === undefined) {
-        throw new LlmError(
-          'DeepSeek image conversion requires the durable attachment service.',
-          'UNSUPPORTED_CONTENT',
-        )
-      }
+      // [本地改造 2026-08-21] 非多模态模型（文本模型）不抛错：
+      // request() 走 serializeRequest → serializeMessages → imagesAsText，
+      // 图片块会转成本地路径文本，agent 用视觉 MCP（mcp__visionqa__look 等）识图后再回答，
+      // 因此 deepseek-v4-flash 等文本模型同样支持发图（不再报 does not accept image input）。
     }
     const apiKey = await this.config.resolveApiKey(connection)
     const userId = this.config.resolveUserId()
