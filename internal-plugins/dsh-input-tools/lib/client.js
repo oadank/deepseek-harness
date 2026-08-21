@@ -586,6 +586,12 @@ window.__ModuleLoader__.load({
       const [vdSamples, setVdSamples] = useState([]); // VoiceDesign 官方示例音频（预生成）
       // [2026-08-21] 试听失败的错误提示（之前失败静默无反馈）
       const [previewErr, setPreviewErr] = useState(null);
+      // [2026-08-22] 试听失败浮动 Toast（fixed 顶部居中，醒目弹窗式，6 秒自动消失）
+      useEffect(() => {
+        if (previewErr === null) return;
+        const t = window.setTimeout(() => setPreviewErr(null), 6000);
+        return () => window.clearTimeout(t);
+      }, [previewErr]);
       // [2026-08-21] API Key 明文/密文切换（眼睛图标）
       const [showKeys, setShowKeys] = useState({});
       // [2026-08-21] 本地 TTS 一键安装命令
@@ -727,8 +733,18 @@ window.__ModuleLoader__.load({
             const audio = new Audio("data:" + d.mediaType + ";base64," + d.data);
             previewRef.current = audio;
             audio.onended = () => { if (previewTagRef.current === curTag) setPreviewing(null); };
-            audio.onerror = () => { if (previewTagRef.current === curTag) setPreviewing(null); };
-            audio.play().catch(() => { if (previewTagRef.current === curTag) setPreviewing(null); });
+            audio.onerror = () => {
+              if (previewTagRef.current === curTag) {
+                setPreviewing(null);
+                setPreviewErr("音频加载/播放失败（服务可能返回了无效音频）");
+              }
+            };
+            audio.play().catch(() => {
+              if (previewTagRef.current === curTag) {
+                setPreviewing(null);
+                setPreviewErr("音频加载/播放失败（服务可能返回了无效音频）");
+              }
+            });
           })
           .catch((e) => { if (previewTagRef.current === curTag) setPreviewing(null); setPreviewErr(String(e?.message ?? e)); });
       };
@@ -893,9 +909,16 @@ window.__ModuleLoader__.load({
         // 分区标题（语音图标已移到各服务商卡片前）
         h("div", { style: { display: "flex", alignItems: "center", gap: "8px", fontSize: "15px", fontWeight: 700, color: "var(--dsw-alias-label-primary,#e6e9ef)" } },
           "语音服务"),
-        // [2026-08-21] 试听失败错误横幅（原来静默无提示）
-        previewErr !== null ? h("div", { style: { fontSize: "12.5px", lineHeight: "1.6", color: "#e5484d", border: "1px solid rgba(229,72,77,.4)", borderRadius: "8px", padding: "8px 10px", background: "rgba(229,72,77,.08)", whiteSpace: "pre-wrap" } },
-          "试听失败：" + previewErr) : null,
+        // [2026-08-21] 试听失败错误提示；[2026-08-22] 改为 fixed 顶部弹窗 Toast（醒目，6s 自动消失）
+        previewErr !== null ? h("div", {
+          style: {
+            position: "fixed", top: "24px", left: "50%", transform: "translateX(-50%)", zIndex: 9999,
+            background: "rgba(229,72,77,.95)", color: "#fff", borderRadius: "10px",
+            padding: "10px 18px", fontSize: "13px", lineHeight: "1.5",
+            boxShadow: "0 6px 24px rgba(0,0,0,.45)", maxWidth: "440px", whiteSpace: "pre-wrap",
+            pointerEvents: "none",
+          },
+        }, "试听失败：" + previewErr) : null,
         // [2026-08-21] 语音能力状态面板（安装即用 vs dsh 原生契约支持）
         caps !== null ? h("div", { style: { border: "1px solid var(--dsw-alias-border-l1,#333a45)", borderRadius: "10px", padding: "10px 12px", display: "flex", flexDirection: "column", gap: "6px", background: "rgba(128,128,128,.05)", fontSize: "12.5px", lineHeight: "1.5" } },
           h("div", { style: { fontSize: "12px", fontWeight: 600, opacity: .8 } }, "语音能力"),
