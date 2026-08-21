@@ -19,9 +19,13 @@ powershell -ExecutionPolicy Bypass -File scripts\setup-profile.ps1
 # Linux/macOS：
 bash scripts/setup-profile.sh
 pnpm install
-pnpm run build:web
+pnpm run build:lib   # ⚠️ 必须！全新 clone 没有编译产物，跳过会报错
+pnpm run build:web   # 前端（语音气泡渲染在此步生效）
 dsh --profile web
 ```
+
+> 🧭 **小白完整安装教程（Windows，含 nssm 服务注册/DSH_HOME 坑/可选 ASR/TTS）见 [INSTALL.md](INSTALL.md)**。
+> 也可以把 INSTALL.md 发给任意 AI 助手让它帮你装。
 
 可选本地 ASR（离线识别）：Windows 运行
 `internal-plugins\dsh-input-tools\scripts\install-asr.ps1`。
