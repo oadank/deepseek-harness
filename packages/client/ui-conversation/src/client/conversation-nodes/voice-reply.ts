@@ -29,7 +29,7 @@ interface VoiceReplyState {
 
 function stateFrom(match: ConversationMatch): VoiceReplyState | undefined {
   if (match.event.type !== 'voice/reply') return undefined
-  const { turn, voiceId, mediaType, bytes, durationMs } = match.event.data
+  const { turn, voiceId, mediaType, bytes, durationMs, transcript } = match.event.data
   return {
     turn,
     seq: match.event.seq,
@@ -39,6 +39,8 @@ function stateFrom(match: ConversationMatch): VoiceReplyState | undefined {
       mediaType: mediaType as VoiceAttachmentRef['mediaType'],
       bytes,
       ...(durationMs === undefined ? {} : { durationMs }),
+      // [本地改造 2026-08-21] AI 语音回复的转写文本（合成的正文），供语音条显示与复制
+      ...(typeof transcript === 'string' && transcript !== '' ? { transcript } : {}),
     },
   }
 }

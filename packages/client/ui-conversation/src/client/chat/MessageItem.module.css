@@ -72,6 +72,39 @@
   line-height: 16px;
 }
 
+/* [本地改造 2026-08-21] ASR 失败（无 transcript）时的弱提示。 */
+.voiceTranscriptFailed {
+  display: block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 16px;
+  opacity: 0.85;
+}
+
+/* [本地改造 2026-08-21] 语音条内置复制按钮（对齐系统 .action：28px 圆形透明）。 */
+.voiceCopy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  border: none;
+  border-radius: 28px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.voiceCopy:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
 /* [本地改造 2026-08-16] 助手语音回复独立横条：左对齐，与用户语音消息同级。 */
 .voiceReplyRow {
   display: flex;

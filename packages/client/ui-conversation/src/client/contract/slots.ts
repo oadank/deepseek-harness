@@ -141,6 +141,32 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       owner: AssistantActionOwnerProps
     }
     /**
+     * Action strip attached to one finalized user message, rendered inside
+     * that message's IconActions row. Mirror of the assistant-actions seat:
+     * user messages carry no messageId, so the owner addresses the message by
+     * its stable `seq` and hands the voice transcripts (the rendered
+     * transcript text lives only on `attachment.transcript`, not in any text
+     * block — contributors that copy a voice message need this directly).
+     * Entries render by ascending `order`.
+     */
+    'conversation.chat.user-actions': {
+      kind: 'list'
+      scope: 'session'
+      owner: UserActionOwnerProps
+    }
+    /**
+     * Actions rendered at the tail of one voice card (inside the card, after
+     * the transcript label), addressed by message `seq` + card `index` and
+     * handed the single card's transcript. This is where a "copy transcript"
+     * affordance belongs — inside the voice bar itself, not in the message
+     * action row. Entries render by ascending `order`.
+     */
+    'conversation.chat.voice-actions': {
+      kind: 'list'
+      scope: 'session'
+      owner: VoiceActionOwnerProps
+    }
+    /**
      * The body of the details panel for the tool call the user selected —
      * one occupant, so taking it means rendering every tool's output, not just
      * the ones you know. The owner passes a frozen `block` whose two lifecycle
@@ -378,6 +404,24 @@ export interface TurnTailOwnerProps {
 export interface AssistantActionOwnerProps {
   /** Stable identity carried from the `assistant/message` event. */
   messageId: MessageId
+}
+
+/** Owner currency of one finalized user message's action strip. */
+export interface UserActionOwnerProps {
+  /** User messages carry no messageId; `seq` is the stable message identity. */
+  seq: number
+  /** Non-empty voice transcripts on this message, in attachment order. */
+  voiceTranscripts: readonly string[]
+}
+
+/** Owner currency of one voice card's tail actions. */
+export interface VoiceActionOwnerProps {
+  /** Stable message identity of the containing user message. */
+  seq: number
+  /** Zero-based index of the voice card within the message. */
+  index: number
+  /** This card's transcript (may be empty when ASR produced none). */
+  transcript: string
 }
 
 /** Hook constrained to business data published on the current Chat Node's Turn. */

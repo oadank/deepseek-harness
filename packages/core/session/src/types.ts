@@ -350,6 +350,8 @@ export interface SessionEventMap {
     bytes: number
     /** Recorder-style duration in milliseconds. */
     durationMs?: number
+    /** [本地改造 2026-08-21] 合成的正文（转写文本），供语音条显示与复制。 */
+    transcript?: string
   }
 }
 

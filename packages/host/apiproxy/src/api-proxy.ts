@@ -236,11 +236,21 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
         attachment = await saveVoiceFile(
           root, item.data, item.part.mediaType, item.part.durationMs,
         )
-        const text = await transcribeVoice(voiceObjectPath(root, attachment.voiceId))
-        if (text !== '') attachment = { ...attachment, transcript: text }
       } catch {
         throw new AttachmentError('Unable to persist voice object.', 'ATTACHMENT_WRITE_FAILED')
       }
+      // [本地改造 2026-08-21] ASR 识别失败 = 阻断发送：语音块不进模型。
+      // 之前识别失败会把无 transcript 的语音块交给模型，serialize 降级为本地
+      // 路径文本，模型自己拿语音路径去本地识别，用户不可控。现在失败即抛错，
+      // 前端收到 attachment-error + message，提示先配置 ASR 服务。
+      const text = await transcribeVoice(voiceObjectPath(root, attachment.voiceId))
+      if (text === '') {
+        throw new AttachmentError(
+          '语音识别失败：ASR 服务未配置或识别出错，请先在「设置 → 语音服务」配置 ASR 后重试。',
+          'VOICE_ASR_FAILED',
+        )
+      }
+      attachment = { ...attachment, transcript: text }
       blocks.push({ type: 'voice', attachment })
       continue
     }
@@ -2588,9 +2598,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
               agent.steer(message)
             } else {
               // [本地改造 2026-08-16] 语音消息与文本/图片一样走正常 followup：voice
-              // 块立即入队上屏（前端语音卡片可播放），agent 唤醒后从序列化文本拿到
-              // 本地语音路径，主动调本地 ASR 工具识别——识别结果在助手侧显示。
-              // host 不再后台转写后二次注入"用户身份"的识别文本。
+              // 块入队上屏（前端语音卡片可播放），识别文本已写入 attachment.transcript，
+              // 模型从序列化文本直接拿到转写内容。
+              // [本地改造 2026-08-21] ASR 识别失败的语音消息在 durablePromptContent
+              // 阶段即被阻断（VOICE_ASR_FAILED），不会走到这里。
               agent.followup(message)
             }
           } catch (error: unknown) {

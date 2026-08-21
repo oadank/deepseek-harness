@@ -9,6 +9,7 @@ import type {
   ModelRetryNode, TurnErrorNode, UserMessageNode,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { VoiceAttachmentRef } from '@deepseek-ai/dsh-client-connection/client'
+import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { JsonBlock, MessageText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
 import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
@@ -249,13 +250,19 @@ function voiceCardWidth(seconds: number): number {
 }
 
 /** Right-aligned voice message card: session-authorized playback with duration. */
-export function VoiceCard({ attachment, load, t }: {
+export function VoiceCard({ attachment, load, actions, asrFailedHint = false, t }: {
   attachment: VoiceAttachmentRef
   load?: (ref: VoiceAttachmentRef) => Promise<string>
+  /** [本地改造 2026-08-21] Voice-actions slot strip rendered at the card tail. */
+  actions?: ReactNode
+  /** [本地改造 2026-08-21] 无转写时是否显示「未能识别」提示：仅用户语音消息
+   *  开启；助手 TTS 语音回复没有 transcript 概念，不显示。 */
+  asrFailedHint?: boolean
   t: ChatViewSlotProps['t']
 }) {  const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const [playing, setPlaying] = useState(false)
+  const [copied, setCopied] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   useEffect(() => {
     let cancelled = false
@@ -318,11 +325,52 @@ export function VoiceCard({ attachment, load, t }: {
           )}
       </button>
       <span className={css.voiceDuration}>{seconds === null ? '' : `${seconds}s`}</span>
-      {attachment.transcript !== undefined && attachment.transcript !== '' && (
+      {hasTranscript ? (
         <span className={css.voiceTranscript} title={t('voice.transcriptLabel')}>
           {attachment.transcript}
         </span>
-      )}
+      ) : asrFailedHint ? (
+        <span className={css.voiceTranscriptFailed} title={t('voice.asrFailed')}>
+          {t('voice.asrFailed')}
+        </span>
+      ) : null}
+      {/* [本地改造 2026-08-21] 语音条复制按钮：外部 voice-actions 优先（插件）；
+          未提供（如 AI 语音回复）且有转写时，用内置按钮兜底，保证所有语音条可复制。 */}
+      {actions !== undefined
+        ? actions
+        : (hasTranscript
+          ? (
+            <button
+              type="button"
+              className={css.voiceCopy}
+              aria-label={copied ? t('copied') : t('copy')}
+              title={copied ? t('copied') : t('copy')}
+              onClick={() => {
+                const text = attachment.transcript ?? ''
+                const done = (): void => {
+                  setCopied(true)
+                  window.setTimeout(() => setCopied(false), 1000)
+                }
+                if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                  void navigator.clipboard.writeText(text).then(done, done)
+                } else { done() }
+              }}
+            >
+              {copied
+                ? (
+                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+                    <path d="M3.5 8.5L6.5 11.5L12.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )
+                : (
+                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+                    <rect x="5.5" y="5.5" width="7" height="7" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3"/>
+                    <path d="M10.5 5.5V4.5A1 1 0 0 0 9.5 3.5H5A1 1 0 0 0 4 4.5v4.5a1 1 0 0 0 1 1h1" fill="none" stroke="currentColor" strokeWidth="1.3"/>
+                  </svg>
+                )}
+            </button>
+          )
+          : null)}
       {url !== null && (
         <audio
           ref={audioRef}
@@ -338,13 +386,25 @@ export function VoiceCard({ attachment, load, t }: {
 
 /** Right-aligned bubble shared by user and steering rows. */
 function UserStyleBubble({
-  content, renderMessageImages, voiceLoader, actions, pending = false, referenceLabels = [], t,
+  content,
+  renderMessageImages,
+  voiceLoader,
+  actions,
+  renderVoiceActions,
+  voiceAsrFailedHint = false,
+  pending = false,
+  referenceLabels = [],
+  t,
 }: {
   content: readonly unknown[]
   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
   voiceLoader: (ref: VoiceAttachmentRef) => Promise<string>
   /** Optional IconActions (or similar) below the bubble; receives the joined text. */
   actions?: (text: string) => ReactNode
+  /** [本地改造 2026-08-21] Voice-actions slot strip, resolved per voice card. */
+  renderVoiceActions?: (attachment: VoiceAttachmentRef, index: number) => ReactNode
+  /** [本地改造 2026-08-21] 语音无转写时显示「未能识别」提示（用户消息才开）。 */
+  voiceAsrFailedHint?: boolean
   /** Whether this is the Host-authoritative pre-admission steering projection. */
   pending?: boolean
   /** Exact session mention labels associated by the adjacent recall node. */
@@ -352,13 +412,29 @@ function UserStyleBubble({
   t: ChatViewSlotProps['t']
 }): ReactNode {
   const { text, images, voices, rest } = contentParts(content)
+  // [本地改造 2026-08-21] 语音消息复制：把每条语音的转写文本并入复制文本。
+  // 纯语音消息本身没有 text 段，转写只挂在 attachment.transcript 上，否则复制按钮
+  // 写出的 text 为空，粘贴是空白。有文字时文本在前、转写按语音顺序追加在后。
+  const voiceTranscripts = voices
+    .map(v => v.attachment.transcript)
+    .filter((s): s is string => typeof s === 'string' && s !== '')
+  const copyText = [text, ...voiceTranscripts].join('\n').trim()
   const truncated = (total: number): string => t('json.truncated', { total })
   const showBubble = text !== '' || rest.length > 0
   return (
     <div className={css.userRow} data-pending-steering={pending || undefined} data-time-hover-root>
       <div className={css.userStack}>
         {renderMessageImages({ images, align: 'end' })}
-        {voices.map((voice, i) => <VoiceCard key={i} attachment={voice.attachment} load={voiceLoader} t={t} />)}
+        {voices.map((voice, i) => (
+          <VoiceCard
+            key={i}
+            attachment={voice.attachment}
+            load={voiceLoader}
+            actions={renderVoiceActions?.(voice.attachment, i)}
+            asrFailedHint={voiceAsrFailedHint}
+            t={t}
+          />
+        ))}
         {showBubble && <div className={css.bubble}>
           {projectUserText(text, referenceLabels)}
           {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
@@ -369,7 +445,7 @@ function UserStyleBubble({
           </div>
         )}
       </div>
-      {actions?.(text)}
+      {actions?.(copyText)}
     </div>
   )
 }
@@ -407,15 +483,36 @@ export function PendingSteeringBubble({ content, renderMessageImages, loadVoice,
 }
 
 /** User and admitted-steering keyed Chat renderer. */
+type UserMessageNodeViewProps = ChatNodeViewProps<'user' | 'steering'>
+  & PropsRenderSlots<'conversation.chat.user-actions' | 'conversation.chat.voice-actions'>
+
 export const UserMessageNodeView = memo(function UserMessageNodeView({
-  node, renderMessageImages, loadVoice, t,
-}: ChatNodeViewProps<'user' | 'steering'>) {
+  node, renderMessageImages, loadVoice, renderSlot, t,
+}: UserMessageNodeViewProps) {
   const data = node.data
+  // [本地改造 2026-08-21] 用户消息操作行：语音转写只挂在 attachment.transcript 上、
+  // 不在 text 段，把转写文本作为 owner currency 交给 user-actions 槽
+  // （供「复制转写」类按钮直接使用，无需再按 id 回溯消息）。
+  const voiceTranscripts = data.content
+    .filter((b): b is UserVoice => b.type === 'voice')
+    .map(b => b.attachment.transcript)
+    .filter((s): s is string => typeof s === 'string' && s !== '')
+  const userActions = renderSlot('conversation.chat.user-actions', { seq: data.seq, voiceTranscripts })
+  // [本地改造 2026-08-21] 语音条尾部动作：逐条语音卡解析，给「复制转写」按钮
+  // 放在语音条最后面（卡片内、转写文本之后），而不是消息操作行里。
+  const renderVoiceActions = (attachment: VoiceAttachmentRef, index: number): ReactNode =>
+    renderSlot('conversation.chat.voice-actions', {
+      seq: data.seq,
+      index,
+      transcript: attachment.transcript ?? '',
+    })
   return (
     <UserStyleBubble
       content={data.content}
       renderMessageImages={renderMessageImages}
       voiceLoader={loadVoice}
+      renderVoiceActions={renderVoiceActions}
+      voiceAsrFailedHint
       {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
       t={t}
       actions={text => (
@@ -424,6 +521,7 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
           time={data.time}
           clock="start"
           className={css.actions}
+          extraActions={userActions}
           t={t}
         />
       )}

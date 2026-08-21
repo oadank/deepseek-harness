@@ -10,10 +10,10 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises'
-import { constants } from 'node:fs'
+import { constants, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import type { VoiceAttachmentRef, VoiceMediaType } from './api/sessions.ts'
 import { edgeTts } from './edge-tts.ts'
 
@@ -104,20 +104,76 @@ export const FFMPEG_BIN = process.env.DSH_VOICE_FFMPEG_BIN
 export const ASR_SERVICE_URL = process.env.DSH_ASR_SERVICE_URL ?? 'http://127.0.0.1:18790/transcribe'
 
 /**
- * Transcribe one recording through the local ASR service. The browser container
- * (webm/ogg) is transcoded to 16 kHz mono WAV first, since sherpa-onnx reads
- * WAV directly. Never throws on recognition failure — returns an empty string
- * so the caller can degrade the model copy.
- * @param audioPath - absolute path of the stored recording.
- * @returns recognized text, or '' when the service is unavailable or fails.
+ * 读取插件 dsh-host-voice 写入的 ~/.dsh/voice-config.json 的 ASR 配置，
+ * 让设置页的 ASR 模式（service / cmd / api）真正作用于后台自动识别主链路，
+ * 而不是永远硬编码打 18790。读取失败或无配置时返回 null，调用方退回默认
+ * 常驻服务，保持旧行为。
+ */
+interface AsrConfig {
+  enabled: boolean
+  mode: 'service' | 'cmd' | 'api'
+  url: string
+  cmd: string
+  apiKey: string
+  apiBaseUrl: string
+}
+
+function loadAsrConfig(): AsrConfig | null {
+  const path = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'voice-config.json')
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'))
+    const asr = parsed?.engines?.asr
+    if (asr === undefined || asr === null || typeof asr !== 'object') return null
+    return {
+      enabled: asr.enabled !== false,
+      mode: asr.mode === 'cmd' || asr.mode === 'api' ? asr.mode : 'service',
+      url: typeof asr.url === 'string' && asr.url.trim() !== '' ? asr.url : 'http://127.0.0.1:18790',
+      cmd: typeof asr.cmd === 'string' ? asr.cmd : '',
+      apiKey: typeof asr.apiKey === 'string' ? asr.apiKey : '',
+      apiBaseUrl: typeof asr.apiBaseUrl === 'string' && asr.apiBaseUrl.trim() !== ''
+        ? asr.apiBaseUrl
+        : 'https://api.xiaomimimo.com/v1',
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 转写一段录音。路由优先级：
+ *  1) 环境变量 DSH_ASR_SERVICE_URL（硬覆盖，保持旧行为，仍只认 service 风格 {audioPath}）；
+ *  2) 读 voice-config.json 的 engines.asr，按 mode 路由：
+ *     - cmd：本地命令（sherpa-onnx-offline.exe，结果在 stderr，合并双流解析 "text"）；
+ *     - api：在线 ASR（小米 mimo-v2.5-asr / OpenAI Whisper 兼容）；
+ *     - service（默认）：POST {audioPath} 到 asr.url/transcribe；
+ *  3) 无配置 / 未启用：退回默认常驻服务 18790。
+ * 浏览器容器（webm/ogg）先转 16kHz 单声道 WAV，sherpa 只认标准 wav。
+ * 识别失败绝不抛错，返回 '' 让调用方降级。
+ * @param audioPath - 已落盘录音的绝对路径。
+ * @returns 识别文本，或 ''（服务不可用 / 失败）。
  */
 export async function transcribeVoice(audioPath: string): Promise<string> {
   let wavPath: string | undefined
+  const controller = new AbortController()
+  const timer = setTimeout(() => { controller.abort() }, 35_000)
   try {
     wavPath = await transcodeToWav(audioPath)
-    const controller = new AbortController()
-    const timer = setTimeout(() => { controller.abort() }, 35_000)
-    try {
+    // 1) 环境变量硬覆盖（保持旧行为）
+    const envUrl = process.env.DSH_ASR_SERVICE_URL
+    if (envUrl !== undefined && envUrl.trim() !== '') {
+      const response = await fetch(envUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioPath: wavPath }),
+        signal: controller.signal,
+      })
+      if (!response.ok) return ''
+      const payload = await response.json() as { text?: unknown }
+      return typeof payload.text === 'string' ? payload.text : ''
+    }
+    // 2) 读插件配置，按 asr.mode 路由
+    const asr = loadAsrConfig()
+    if (asr === null || !asr.enabled) {
       const response = await fetch(ASR_SERVICE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -127,12 +183,91 @@ export async function transcribeVoice(audioPath: string): Promise<string> {
       if (!response.ok) return ''
       const payload = await response.json() as { text?: unknown }
       return typeof payload.text === 'string' ? payload.text : ''
-    } finally {
-      clearTimeout(timer)
     }
+    if (asr.mode === 'cmd') {
+      // [本地改造 2026-08-21] cmd 模式缺命令配置 = 明确失败，绝不降级到常驻服务
+      if (asr.cmd.trim() === '') {
+        console.error('[asr] cmd 模式但未配置本地命令，识别失败（不降级常驻服务）')
+        return ''
+      }
+      const parts = asr.cmd.trim().split(/\s+/)
+      const bin = parts[0]
+      if (bin !== undefined) {
+        const result = spawnSync(bin, [...parts.slice(1), wavPath], {
+          windowsHide: true,
+          encoding: 'utf-8',
+          timeout: 60_000,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+        const all = (result.stdout ?? '') + '\n' + (result.stderr ?? '')
+        const m = all.match(/"text"\s*:\s*"([^"]*)"/)
+        return (m?.[1] ?? '').trim()
+      }
+      return ''
+    }
+    if (asr.mode === 'api') {
+      // [本地改造 2026-08-21] api 模式缺 key = 明确失败，绝不降级到常驻服务
+      if (asr.apiKey.trim() === '') {
+        console.error('[asr] api 模式但未配置 API Key，识别失败（不降级常驻服务）')
+        return ''
+      }
+      const apiKey = asr.apiKey.trim()
+      const baseUrl = asr.apiBaseUrl.replace(/\/+$/, '')
+      const audioBase64 = (await readFile(audioPath)).toString('base64')
+      if (baseUrl.includes('openai')) {
+        const form = new FormData()
+        const blob = new Blob([Buffer.from(audioBase64, 'base64')], { type: 'audio/wav' })
+        form.append('file', blob, 'audio.wav')
+        form.append('model', 'whisper-1')
+        const response = await fetch(`${baseUrl}/audio/transcriptions`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}` },
+          body: form,
+          signal: controller.signal,
+        })
+        if (!response.ok) return ''
+        const payload = await response.json() as { text?: unknown }
+        return typeof payload.text === 'string' ? payload.text.trim() : ''
+      }
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'mimo-v2.5-asr',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'input_audio', input_audio: { data: `data:audio/wav;base64,${audioBase64}` } },
+              ],
+            },
+          ],
+          extra_body: { asr_options: { language: 'auto' } },
+        }),
+        signal: controller.signal,
+      })
+      if (!response.ok) return ''
+      const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> }
+      const text = typeof payload.choices?.[0]?.message?.content === 'string'
+        ? payload.choices[0].message.content.trim()
+        : ''
+      return text
+    }
+    // 3) service 模式（默认）：POST {audioPath} 到 asr.url/transcribe
+    const baseUrl = asr.url.trim().replace(/\/+$/, '')
+    const response = await fetch(`${baseUrl}/transcribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audioPath: wavPath }),
+      signal: controller.signal,
+    })
+    if (!response.ok) return ''
+    const payload = await response.json() as { text?: unknown }
+    return typeof payload.text === 'string' ? payload.text : ''
   } catch {
     return ''
   } finally {
+    clearTimeout(timer)
     if (wavPath !== undefined) await unlink(wavPath).catch(() => {})
   }
 }
