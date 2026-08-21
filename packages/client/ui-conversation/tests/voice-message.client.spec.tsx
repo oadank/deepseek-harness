@@ -16,7 +16,7 @@ import { zh } from '../src/client/locales.ts'
 
 const t: ChatNodeViewProps['t'] = makeTranslate(zh, commonZh)
 
-function voiceProps(attachment: VoiceAttachmentRef, loadVoice: (ref: VoiceAttachmentRef) => Promise<string>): ChatNodeViewProps<'user' | 'steering'> {
+function voiceProps(attachment: VoiceAttachmentRef, loadVoice: (ref: VoiceAttachmentRef) => Promise<string>): ChatNodeViewProps<'user'> {
   const viewNode: ChatConversationViewNode = {
     key: 'fixture:user:1',
     kind: 'user',
@@ -35,7 +35,7 @@ function voiceProps(attachment: VoiceAttachmentRef, loadVoice: (ref: VoiceAttach
     t,
     loadImage: () => Promise.resolve('blob:image'),
     loadVoice,
-  } as unknown as ChatNodeViewProps<'user' | 'steering'>
+  } as unknown as ChatNodeViewProps<'user'>
 }
 
 beforeEach(() => {
