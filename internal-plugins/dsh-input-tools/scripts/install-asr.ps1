@@ -6,28 +6,35 @@
 #   3. ffmpeg（无则用 winget 安装）
 #   4. 注册 nssm 服务 asr（端口 18790，开机自启）
 #
-# 安装位置：自动放在本插件包目录下的 sherpa-onnx/（脚本位于
-#   <插件包>/scripts/install-asr.ps1，自动推导到 <插件包>/sherpa-onnx）
-#   ——所有人装插件后路径都统一，不会乱。
+# 安装位置（2026-08-22 改）：默认装到**独立目录**，不装插件包目录——
+#   插件包（profile 副本或源码 internal-plugins）会随升级/重装被覆盖，
+#   模型放里面会丢。默认顺序：
+#     1) -InstallDir 参数显式指定（最高优先）
+#     2) 检测已有 sherpa-onnx（之前装过则复用）：~\.dsh\sherpa-onnx / C:\D\opt\sherpa-onnx / D:\opt\deepseek-harness\asr
+#     3) 以上都没有 → ~\.dsh\sherpa-onnx（dsh 数据目录，跨升级保留）
 # 用法：以管理员身份打开 PowerShell，执行：
-#   powershell -ExecutionPolicy Bypass -File "<插件包>\scripts\install-asr.ps1"
-# 可选参数：-Port 18790（自定义端口）
+#   powershell -ExecutionPolicy Bypass -File "<脚本路径>\install-asr.ps1"
+# 可选参数：-Port 18790（自定义端口）；-InstallDir "D:\opt\my-sherpa"（自定义安装目录）
 # ============================================================
 param(
-  [int]$Port = 18790
+  [int]$Port = 18790,
+  [string]$InstallDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 $Version = "v1.13.6"
 
-# ---- 0. 自动推导安装目录：脚本在 <插件包>/scripts/，安装到 <插件包>/sherpa-onnx/ ----
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PluginRoot = Split-Path -Parent $ScriptDir
-$InstallDir = Join-Path $PluginRoot "sherpa-onnx"
+# ---- 0. 确定安装目录（独立目录，不装插件包内）----
+if ($InstallDir -eq "") {
+  foreach ($c in @("$env:USERPROFILE\.dsh\sherpa-onnx", "C:\D\opt\sherpa-onnx", "D:\opt\deepseek-harness\asr")) {
+    if (Test-Path (Join-Path $c "bin")) { $InstallDir = $c; break }
+  }
+  if ($InstallDir -eq "") { $InstallDir = Join-Path $env:USERPROFILE ".dsh\sherpa-onnx" }
+}
 
 Write-Host "==== dsh ASR 一键安装 ====" -ForegroundColor Cyan
-Write-Host "插件包目录: $PluginRoot"
 Write-Host "安装目录:   $InstallDir"
+Write-Host "  （独立目录，不随插件升级/重装被覆盖）" -ForegroundColor DarkGray
 Write-Host "服务端口:   $Port"
 
 # ---- 0b. 幂等保护：已完整安装则直接退出（不下载、不注册、不碰任何现有配置）----

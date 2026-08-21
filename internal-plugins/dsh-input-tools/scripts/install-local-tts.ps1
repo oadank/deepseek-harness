@@ -7,13 +7,22 @@
 #   4. 生成 local-tts.mjs 启动脚本（与插件"本地命令"契约一致：
 #      node local-tts.mjs <文本> → stdout 输出 mp3 音频字节）
 #
-# 安装位置：自动放在本插件包目录下的 sherpa-onnx/（脚本位于
-#   <插件包>/scripts/install-local-tts.ps1，自动推导到 <插件包>/sherpa-onnx）
-#   ——与 ASR 安装共用同一目录，两个 exe 一次下载全有。
+# 安装位置（2026-08-22 改）：默认装到**独立目录**，不装插件包目录——
+#   插件包（profile 副本或源码 internal-plugins）会随升级/重装被覆盖，
+#   模型放里面会丢。默认顺序：
+#     1) -InstallDir 参数显式指定（最高优先，可指定源码 internal-plugins 等任意位置）
+#     2) 检测已有 sherpa-onnx（ASR 装过则复用同一份，省一次下载）：
+#        ~\.dsh\sherpa-onnx / C:\D\opt\sherpa-onnx / D:\opt\deepseek-harness\asr
+#     3) 以上都没有 → ~\.dsh\sherpa-onnx（dsh 数据目录，跨升级保留）
 # 用法：以管理员身份打开 PowerShell，执行：
-#   powershell -ExecutionPolicy Bypass -File "<插件包>\scripts\install-local-tts.ps1"
+#   powershell -ExecutionPolicy Bypass -File "<脚本路径>\install-local-tts.ps1"
+#   或指定安装目录：... install-local-tts.ps1 -InstallDir "D:\opt\my-sherpa"
 # 装完后到 dsh 设置 → 语音服务 → 本地 TTS，把提示的命令填进「本地命令」。
 # ============================================================
+param(
+  [string]$InstallDir = ""
+)
+
 $ErrorActionPreference = "Stop"
 $Version = "v1.13.6"
 
@@ -57,14 +66,18 @@ function Expand-TarBz2 {
   return $true
 }
 
-# ---- 0. 自动推导安装目录：脚本在 <插件包>/scripts/，安装到 <插件包>/sherpa-onnx/ ----
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PluginRoot = Split-Path -Parent $ScriptDir
-$InstallDir = Join-Path $PluginRoot "sherpa-onnx"
+# ---- 0. 确定安装目录（独立目录，不装插件包内）----
+if ($InstallDir -eq "") {
+  # 复用已有 sherpa-onnx（ASR 装过则共用，省一次下载）
+  foreach ($c in @("$env:USERPROFILE\.dsh\sherpa-onnx", "C:\D\opt\sherpa-onnx", "D:\opt\deepseek-harness\asr")) {
+    if (Test-Path (Join-Path $c "bin")) { $InstallDir = $c; break }
+  }
+  if ($InstallDir -eq "") { $InstallDir = Join-Path $env:USERPROFILE ".dsh\sherpa-onnx" }
+}
 
 Write-Host "==== dsh 本地 TTS 一键安装 ====" -ForegroundColor Cyan
-Write-Host "插件包目录: $PluginRoot"
 Write-Host "安装目录:   $InstallDir"
+Write-Host "  （独立目录，不随插件升级/重装被覆盖；与 ASR 共用同一份 sherpa-onnx）" -ForegroundColor DarkGray
 
 # ---- 0b. 幂等保护：已完整安装则直接退出 ----
 $exeExists = Test-Path "$InstallDir\bin\sherpa-onnx-offline-tts.exe"
@@ -198,14 +211,16 @@ try {
 }
 '@
 $launcher = $launcherTemplate.Replace('__SHERPA__', $exePath).Replace('__BASE__', $basePath)
-$launcherFile = "$PluginRoot\local-tts.mjs"
+$launcherFile = Join-Path $InstallDir "local-tts.mjs"
 Set-Content -Path $launcherFile -Value $launcher -Encoding UTF8
 Write-Host "  local-tts.mjs: $launcherFile" -ForegroundColor Green
 
-# ---- 6. 完成提示 ----
+# ---- 6. 完成提示（命令只在路径含空格时才加引号；插件已能正确处理引号）----
 Write-Host "`n==== 安装完成 ====" -ForegroundColor Cyan
 $nodeExe = (Get-Command node).Source
-$cmdLine = "$nodeExe `"$launcherFile`""
+$nodePart = if ($nodeExe -match ' ') { "`"$nodeExe`"" } else { $nodeExe }
+$launcherPart = if ($launcherFile -match ' ') { "`"$launcherFile`"" } else { $launcherFile }
+$cmdLine = "$nodePart $launcherPart"
 Write-Host "请到 dsh 设置 → 语音服务 → 本地 TTS，把下面这行填进「本地命令」："
 Write-Host ""
 Write-Host "  $cmdLine" -ForegroundColor Green

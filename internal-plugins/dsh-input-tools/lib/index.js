@@ -426,6 +426,28 @@ async function synthesizeXiaomiVoiceClone(text, cfg, globalCfg, voiceDesc) {
   return toMp3(new Uint8Array(Buffer.from(data, 'base64')), 'audio/wav')
 }
 
+// [2026-08-22] 解析 Windows 命令行参数（正确处理双引号：引号内空格不拆、剥掉引号）。
+// 之前用 command.split(/\s+/) 拆参数，用户填的带引号路径会被整段含引号传给
+// execFileSync → node 把 "C:\...\local-tts.mjs" 当成相对路径拼上 cwd →
+// Cannot find module 'D:\opt\...\"C:\Users\...'。本函数根治该问题。
+function splitCommandLine(cmd) {
+  const args = []
+  let cur = ''
+  let inQuote = false
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]
+    if (ch === '"') {
+      inQuote = !inQuote
+    } else if (ch === ' ' || ch === '\t') {
+      if (inQuote) { cur += ch } else if (cur !== '') { args.push(cur); cur = '' }
+    } else {
+      cur += ch
+    }
+  }
+  if (cur !== '') args.push(cur)
+  return args
+}
+
 // ── local 本地 MeloTTS：HTTP 常驻服务优先，CMD 兜底 ──
 async function synthesizeLocalVoice(text, cfg) {
   const url = cfg?.url?.trim() ?? ''
@@ -442,7 +464,7 @@ async function synthesizeLocalVoice(text, cfg) {
   }
   const command = cfg?.cmd?.trim() ?? ''
   if (command === '') return null
-  const parts = command.split(/\s+/)
+  const parts = splitCommandLine(command)
   const bin = parts[0]
   if (bin === undefined) return null
   const rest = parts.slice(1)
@@ -523,7 +545,7 @@ async function transcribeAudio(base64Audio, cfg) {
     }
     // 2) 本地命令（sherpa-onnx-offline.exe，结果输出到 stderr，需合并双流解析）
     if (asr.mode === 'cmd' && (asr.cmd ?? '').trim() !== '') {
-      const parts = asr.cmd.trim().split(/\s+/)
+      const parts = splitCommandLine(asr.cmd.trim())
       const bin = parts[0]
       if (bin === undefined) return { ok: false, error: '命令格式错误' }
       const { spawnSync } = await import('node:child_process')

@@ -909,14 +909,15 @@ window.__ModuleLoader__.load({
         // 分区标题（语音图标已移到各服务商卡片前）
         h("div", { style: { display: "flex", alignItems: "center", gap: "8px", fontSize: "15px", fontWeight: 700, color: "var(--dsw-alias-label-primary,#e6e9ef)" } },
           "语音服务"),
-        // [2026-08-21] 试听失败错误提示；[2026-08-22] 改为 fixed 顶部弹窗 Toast（醒目，6s 自动消失）
+        // [2026-08-21] 试听失败错误提示；[2026-08-22] fixed 顶部弹窗 Toast + 限高滚动（错误堆栈超长不撑爆）
         previewErr !== null ? h("div", {
           style: {
             position: "fixed", top: "24px", left: "50%", transform: "translateX(-50%)", zIndex: 9999,
             background: "rgba(229,72,77,.95)", color: "#fff", borderRadius: "10px",
             padding: "10px 18px", fontSize: "13px", lineHeight: "1.5",
-            boxShadow: "0 6px 24px rgba(0,0,0,.45)", maxWidth: "440px", whiteSpace: "pre-wrap",
-            pointerEvents: "none",
+            boxShadow: "0 6px 24px rgba(0,0,0,.45)",
+            maxWidth: "520px", maxHeight: "45vh", overflowY: "auto",
+            whiteSpace: "pre-wrap", wordBreak: "break-word", pointerEvents: "none",
           },
         }, "试听失败：" + previewErr) : null,
         // [2026-08-21] 语音能力状态面板（安装即用 vs dsh 原生契约支持）
