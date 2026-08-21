@@ -18,7 +18,9 @@
 | 语音气泡 | 用户/AI 语音消息可点击播放，尾部复制转写文本 |
 
 ### 图片
-- 输入框图片按钮上传 → **文本模型也能发图**：图片转本地路径，AI 自动调视觉 MCP 识图后回答
+- 输入框图片按钮上传 → **文本模型也能发图**：图片转本地路径文本，AI 自动调视觉 MCP 识图后回答
+- 附件存储自动生成**带扩展名的别名**（jpg/png/webp→png），zai-vision 等按扩展名校验的
+  识图工具可直接读取（源码补丁包含，无需额外配置）
 
 ### 余额
 - 直连模型时输入框右侧实时显示余额（¥xx）
@@ -81,7 +83,9 @@ setup 脚本自动完成：装插件进 profile → 注册 → 检查 ffmpeg →
 ### 依赖
 
 - **ffmpeg**（语音转码必需）：Windows `winget install ffmpeg`；Linux `sudo apt install ffmpeg`
-- 视觉 MCP（图片识图用）：在 dsh 设置里配置 vision MCP 服务（如 visionqa / zai-vision）
+- **视觉 MCP**（图片识图必需）：在 dsh 设置里配置至少一个视觉 MCP 服务，AI 用它的工具识图：
+  - `zai-vision`（推荐，通用）：`npx -y @z_ai/mcp-server`，配 `Z_AI_BASE_URL=http://localhost:11434/v1/`（本地 ollama 跑 qwen3-vl 等视觉模型），按扩展名校验（已由补丁解决）
+  - `visionqa`（本机自建服务）
 
 ## 配置
 
