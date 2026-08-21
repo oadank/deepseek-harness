@@ -1,7 +1,7 @@
 /** Content-addressed, owner-private local attachment storage. */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
+import { constants, existsSync } from 'node:fs'
 import { chmod, link, mkdir, open, readFile, unlink } from 'node:fs/promises'
 import { dirname, join, parse, resolve } from 'node:path'
 import {
@@ -18,6 +18,16 @@ import { detectImage, probeImage } from './image.ts'
 
 const ID_PATTERN = /^sha256:([a-f0-9]{64})$/
 const durableHomes = new Set<string>()
+
+/**
+ * [本地改造 2026-08-21] 内容寻址对象（无扩展名）的"带扩展名别名"路径。
+ * zai-vision 等视觉 MCP 按扩展名（.jpg/.jpeg/.png）校验，无扩展名会被拒绝。
+ * jpeg→.jpg、png→.png、webp→.png（webp 由调用方用 sharp 转码成 png 别名）。
+ */
+function extensionAliasPath(target: string, mediaType: ImageAttachmentRef['mediaType']): string | null {
+  const ext = mediaType === 'image/jpeg' ? '.jpg' : mediaType === 'image/png' ? '.png' : mediaType === 'image/webp' ? '.png' : null
+  return ext === null ? null : `${target}${ext}`
+}
 
 function digest(data: Uint8Array): string {
   return createHash('sha256').update(data).digest('hex')
@@ -161,6 +171,19 @@ export async function saveImageFile(root: string, input: SaveImageAttachment, li
       if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
       const existing = new Uint8Array(await readFile(target))
       if (digest(existing) !== sha256) throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
+    }
+    // [本地改造 2026-08-21] 确保带扩展名别名存在（首次存储与 dedup 命中都执行）：
+    // jpeg/png 硬链接（零拷贝）；webp 用 sharp 转成 png 别名。供 zai-vision 等按扩展名校验的 MCP 使用。
+    const alias = extensionAliasPath(target, metadata.mediaType)
+    if (alias !== null && !(await existsSync(alias))) {
+      try {
+        if (metadata.mediaType === 'image/webp') {
+          const { default: sharpMod } = await import('sharp')
+          await sharpMod(input.data).png().toFile(alias)
+        } else {
+          await link(target, alias)
+        }
+      } catch { /* 别名失败可忽略（主对象已持久化） */ }
     }
     // Persist the target entry and close a concurrent bucket-creation window
     // before the reference can reach a session checkpoint. The dedup path
