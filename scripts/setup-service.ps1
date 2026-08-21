@@ -5,6 +5,9 @@
 #   ② DSH_HOME：自动设为 <当前用户>\.dsh（nssm 默认 LocalSystem 会读系统账户目录，
 #      导致插件不加载、语音设置页空白——必须显式指定）
 #   ③ 日志：自动指向 <仓库>/logs/dsh-web.out.log / err.log
+#   ④ ffmpeg：自动探测 ffmpeg 路径并写入 DSH_VOICE_FFMPEG_BIN——语音识别(transcribeVoice)
+#      依赖它把浏览器 webm/ogg 录音转成 sherpa 能吃的 wav；不设会导致真实语音消息识别失败
+#      （设置页的识别「测试」因示例是预渲染 wav 所以能过，但真录音是 webm 必挂）
 #
 # 用法（管理员 PowerShell，在仓库根目录）：
 #   powershell -ExecutionPolicy Bypass -File scripts\setup-service.ps1
@@ -61,6 +64,11 @@ Write-Host "  node:    $nodeExe"
 Write-Host "  仓库:    $RepoRoot"
 Write-Host "  DSH_HOME:$DshHome   （服务将使用你的数据目录，插件/配置才找得到）" -ForegroundColor Green
 
+# ---- 2b. 探测 ffmpeg 路径（语音识别转码必需）----
+$ff = (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source
+if (-not $ff) { $ff = "ffmpeg" }   # 兜底走 PATH（服务进程继承系统 PATH）
+Write-Host "  ffmpeg:  $ff   （写入 DSH_VOICE_FFMPEG_BIN，语音识别转码用）" -ForegroundColor Green
+
 # ---- 3. 组装启动参数 ----
 $binEntry = "--import tsx/esm apps/cli/src/bin.ts web --no-open --port $Port --host 127.0.0.1"
 if ($TrustedHosts -ne "") {
@@ -70,16 +78,19 @@ if ($TrustedHosts -ne "") {
 }
 Write-Host "  参数:    $binEntry"
 
-# ---- 4. 注册服务（幂等：已存在先删）----
+# ---- 4. 注册服务（幂等：已存在先删；EAP=Stop 下 nssm 对不存在服务报错写 stderr 会抛 NativeCommandError，需临时放宽）----
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 & $nssm.Source stop $ServiceName 2>$null | Out-Null
 & $nssm.Source remove $ServiceName confirm 2>$null | Out-Null
+$ErrorActionPreference = $prevEAP
 & $nssm.Source install $ServiceName "$nodeExe" "$binEntry" | Out-Null
 & $nssm.Source set $ServiceName AppDirectory "$RepoRoot" | Out-Null
-& $nssm.Source set $ServiceName AppEnvironmentExtra "DSH_HOME=$DshHome" | Out-Null
+& $nssm.Source set $ServiceName AppEnvironmentExtra "DSH_HOME=$DshHome" "DSH_VOICE_FFMPEG_BIN=$ff" | Out-Null
 & $nssm.Source set $ServiceName Start SERVICE_AUTO_START | Out-Null
 New-Item -ItemType Directory -Force -Path "$RepoRoot\logs" | Out-Null
-& $nssm.Source set $ServiceName AppStdout "$RepoRoot\logs\dsh-web.out.log" | Out-Null
-& $nssm.Source set $ServiceName AppStderr "$RepoRoot\logs\dsh-web.err.log" | Out-Null
+& $nssm.Source set $ServiceName AppStdout "$RepoRoot\logs\$ServiceName.out.log" | Out-Null
+& $nssm.Source set $ServiceName AppStderr "$RepoRoot\logs\$ServiceName.err.log" | Out-Null
 & $nssm.Source set $ServiceName AppRotateFiles 1 | Out-Null
 Write-Host "  服务已注册：$ServiceName" -ForegroundColor Green
 
