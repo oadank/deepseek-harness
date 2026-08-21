@@ -199,7 +199,7 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
     switch (nodeOwner.node.kind) {
       case 'user':
       case 'steering':
-        return <UserMessageNodeView {...nodeProps<'user' | 'steering'>()} />
+        return <UserMessageNodeView {...nodeProps<'user'>()} />
       case 'context':
         return <ContextMessageNodeView {...nodeProps<'context'>()} />
       case 'assistant-step':

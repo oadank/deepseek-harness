@@ -72,7 +72,7 @@ function MessageItem({ node, t: translate, referenceLabels }: MessageItemProps) 
   switch (node.kind) {
     case 'user':
     case 'steering':
-      return <UserMessageNodeView {...props as ChatNodeViewProps<'user' | 'steering'>} />
+      return <UserMessageNodeView {...props as ChatNodeViewProps<'user'>} />
     case 'context':
       return <ContextMessageNodeView {...props as ChatNodeViewProps<'context'>} />
     case 'compaction':
