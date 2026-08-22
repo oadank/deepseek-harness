@@ -33,8 +33,6 @@
 > | 13 | `packages/core/session/src/types.ts`、`known-event-types.ts` + `packages/host/apiproxy/src/api-proxy.ts` + `api/sessions.ts`、`sessions.schema.ts`、`rpc-map.ts`、`fetch/client.ts`、`fetch/handler.ts` + `packages/client/runtime/.../session.ts`、`contract/session.ts` + `packages/client/connection/.../api.ts`、`index.ts` + `api/index.ts` | 加"读语音对象"接口（`session.voice` RPC 全链路：host 读语音文件 → 客户端拿字节） | 前端要播放历史语音消息，得能从会话里把语音文件读回来 | ✅ 实测读回 257KB |
 > | 14 | 前端 **client lib 重建**（`build:lib:client` + `build:web`）：InputBar 图标位置、`balance.get`/`session.voice` 前端 API 面、测试 mock（fake-api/fixture 加 balance/voice/readVoice） | 之前只跑 `build:web` 用的是旧 lib——**前端改动全没生效**（图标位置没变、余额不显示的根因）。正确流程：改 ui-conversation/connection 等前端 src → 先 `build:lib:client` 再 `build:web` | 前端组件是运行时插件（lib/client.js），apps/web 只是壳 | ✅ 实测：语音回复触发 + 余额 RPC 3.31 |
 >
-> **还在路上**：官方前端不渲染语音消息（显示成原始 JSON、AI 语音回复无条幅）——需要把本地的语音消息渲染层（MessageItem 气泡 VoiceCard / TtsVoiceCard / VoiceReplyNodeView 等约 6-8 个文件）搬到官方前端。**数据链路已通**（`session.voice` RPC 实测读回 257KB），下一步是前端组件渲染。
->
 > 详细版本（含每处提交号）：[docs/LOCAL-MODIFICATIONS.md](docs/LOCAL-MODIFICATIONS.md)
 
 > 只想用官方原版？见[官方仓库](https://github.com/deepseek-ai/deepseek-harness)。
