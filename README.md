@@ -30,6 +30,7 @@
 > | 10 | `packages/host/apiproxy/src/api/balance.ts`、`balance.schema.ts`（**新增**）+ `rpc-map.ts`、`api/index.ts`、`api-proxy.ts`、`fetch/client.ts`、`fetch/handler.ts`、`index.ts`、测试 mock 共 9 处 | 加"查余额"接口（RPC） | 官方没有查余额接口；**插件的余额显示只是界面，数据要调这个接口拿**，接口在源码里必须有 | ✅ |
 > | 11 | `packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` | 插件图标（图片/语音）从权限按钮后面挪到命令 `+` 前面 | 用户要求按钮顺序是 [🖼][🎙][+] | ✅ |
 > | 12 | `packages/host/apiproxy/package.json` | 加 `ws`、`@types/ws` 依赖 | Edge TTS 合成语音要连微软 WebSocket 服务 | ✅ |
+> | 13 | `packages/core/session/src/types.ts`、`known-event-types.ts` + `packages/host/apiproxy/src/api-proxy.ts` + `api/sessions.ts`、`sessions.schema.ts`、`rpc-map.ts`、`fetch/client.ts`、`fetch/handler.ts` + `packages/client/runtime/.../session.ts`、`contract/session.ts` + `packages/client/connection/.../api.ts`、`index.ts` + `api/index.ts` | 加"读语音对象"接口（`session.voice` RPC 全链路：host 读语音文件 → 客户端拿字节） | 前端要播放历史语音消息，得能从会话里把语音文件读回来 | ✅ 实测读回 257KB |
 >
 > **插件改动（不是源码，是 `@oadank/dsh-input-tools` 插件的代码，三处副本同步：源码仓库 + 3080 运行时 + 3081 运行时）**：
 >
@@ -37,7 +38,7 @@
 > |---|---|---|
 > | P1 | `lib/index.js`：自动语音回复规则，以前只认"语音块"，现在**文本以【用户语音】开头也触发语音回复** | 降级场景下语音会变成【用户语音】文字，规则也要认它 |
 >
-> **还在路上**：官方前端不渲染语音消息（显示成原始 JSON、AI 语音回复无条幅）——需要把本地的语音消息渲染层（MessageItem 气泡 / TtsVoiceCard / VoiceReplyNodeView 等约 6-8 个文件）搬到官方前端，是最大的一块。
+> **还在路上**：官方前端不渲染语音消息（显示成原始 JSON、AI 语音回复无条幅）——需要把本地的语音消息渲染层（MessageItem 气泡 VoiceCard / TtsVoiceCard / VoiceReplyNodeView 等约 6-8 个文件）搬到官方前端。**数据链路已通**（`session.voice` RPC 实测读回 257KB），下一步是前端组件渲染。
 >
 > 详细版本（含每处提交号）：[docs/LOCAL-MODIFICATIONS.md](docs/LOCAL-MODIFICATIONS.md)
 
