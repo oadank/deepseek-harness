@@ -32,18 +32,18 @@
 > | 12 | `host/apiproxy/package.json` | 加 `ws`、`@types/ws` 依赖 | Edge TTS 合成语音要连微软 WebSocket 服务 | ✅ |
 > | 13 | `core/session/src/types.ts`、`known-event-types.ts` | 加 `voice` / `reply` 会话事件类型 | 语音消息/语音回复要独立持久化；插件 append 事件必须用它 | ✅ |
 > | 14 | `host/apiproxy`（api-proxy + api/sessions.ts、sessions.schema.ts、rpc-map.ts、fetch/client.ts、fetch/handler.ts）+ `client/runtime`（session.ts、contract/session.ts）+ `client/connection`（api.ts、index.ts）+ `api/remotes` | 加"读语音对象"接口（`session.voice` RPC 全链路：host 读语音文件 → 客户端拿字节播放） | 前端要播放历史语音消息，得能从会话里把语音文件读回来 | ✅ 实测读回 257KB |
-> | 15 | `llm/llm-pi-ai/src/context.ts`、`adapter.ts`、`catalog.ts` | pi-ai 模型路由同样把图片转文字 + 模型目录加识图说明 | 与 deepseek 路由一致，**任何入口**的图都不丢 | ✅ |
-> | 16 | `attachment/attachment-local/src/store.ts`、`attachment/attachment/src/error.ts` | 附件落盘补**扩展名别名**：sha256 内容寻址（无扩展名）→ jpg/png 硬链接、webp 用 sharp 转 png | 官方存储是 sha256 内容寻址**没扩展名**（源头设计，改不了）；路径文本要带扩展名，插件识图工具才能读到物理文件 | ✅ |
-> | 17 | `client/ui-conversation/src/client/chat/MessageItem.tsx`（+278 行） | 语音消息气泡：可点击播放、尾部复制转写文本、微信式互斥（同一时刻只播一条） | 语音消息要在聊天里显示成气泡 | ✅ |
-> | 18 | `client/ui-conversation/src/client/chat/TtsVoiceCard.tsx`（**新增** 67 行） | AI 语音回复卡片（base64 转 Blob 播放） | AI 语音回复的展示 | ✅ |
-> | 19 | `client/ui-conversation/src/client/chat/VoiceReplyNodeView.tsx`（**新增**）+ `conversation-nodes/voice-reply.ts` + 节点注册（register-node-renderers/register） | 注册 voice/reply 节点渲染器 | 语音回复要独立渲染成一条 | ✅ |
-> | 20 | `client/ui-conversation/src/client/contract/slots.ts`（+92 行） | 加 `voice-actions` 槽声明 | 给语音条留扩展 UI 挂载点（插件复制按钮等） | ✅ |
-> | 21 | `client/ui-conversation/src/client/apply.ts`、`service.ts`、`locales.ts`、`index.ts`、`ChatView.tsx` 等 | 配套：节点注册、文案、布局 | 前端整体衔接语音功能 | ✅ |
-> | 22 | `subprocess/subprocess-local/src/spawn.ts`、`shell/pwsh-local/src/index.ts` | 杀进程用 taskkill 全路径兜底 | Windows 下杀子进程更稳 | ✅ |
-> | 23 | `acp/acp/src/index.ts`（+95 行）、`api/remotes/src/client/index.ts` | ACP 扩展 + remotes 导出配套 | 本地改造配套 | ✅ |
-> | 24 | `host/directory-picker-auto/src/resolve.ts` | 目录选择支持 `DSH_FORCE_BROWSE_PICKER=1` 强制网页浏览 | 远程/服务会话（nssm）里系统原生弹窗弹不出来 | ✅ |
-> | 25 | `compaction/command-compact`、`feedback/command-feedback`、`goal/command-goal`、`plan/plan-mode`、`session-query/session-log-export`、`interaction/permission-presets`、`client/modules`、`client/ui-theme` | 各 10~60 行小改 | 与语音/图片事件配套 | ✅ |
-> | 26 | 前端 **client lib 重建流程**（`build:lib:client` + `build:web`） | 前端组件（ui-conversation/connection 等）是**运行时插件 lib**，改完 src 必须先 `build:lib:client` 再 `build:web` 才生效 | 之前只跑 `build:web` 用的旧 lib，图标位置/余额/语音前端面**全没生效**（实测过的坑） | ✅ |
+> | 15 | `llm/llm-pi-ai/src/context.ts`、`adapter.ts`、`catalog.ts` | pi-ai 模型路由（通义 qwen-token-plan-cn 等）**同样**把图片块转成"本地附件路径文本"、语音块转识别文本 | **只改 deepseek 路由不够**——默认模型走 pi-ai 路由（qwen-token-plan-cn），不改的话发图在这条路由照样报错/丢图，两条路由必须一致，"任何入口的图都不丢"才成立 | ✅ |
+> | 16 | `attachment/attachment-local/src/store.ts`、`attachment/attachment/src/error.ts` | 附件落盘补**带扩展名的硬链接别名**：jpeg→.jpg、png→.png（硬链接零拷贝）、webp→.png（sharp 转码） | 官方附件存储是 **sha256 内容寻址、文件路径无扩展名**（源头设计改不了）；视觉识图工具按扩展名校验，**无扩展名直接拒绝**——历史上发图识图报"文件不存在/格式不支持" | ✅ |
+> | 17 | `client/ui-conversation/src/client/chat/MessageItem.tsx`（+278 行） | 用户语音消息渲染成**语音气泡**：点击播放、显示时长、可复制转写文本、微信式互斥（同时只播一条）；录音开始时自动停掉播放中的语音（防回声） | **官方前端不渲染 voice 块**——语音消息要么显示成原始 JSON、要么不显示，必须自己加渲染层 | ✅ |
+> | 18 | `client/ui-conversation/src/client/chat/TtsVoiceCard.tsx`（**新增** 67 行） | AI 语音回复卡片（base64 转 Blob 播放） | AI 用语音回复时**没有展示层**，回一句语音用户看不见也听不了 | ✅ |
+> | 19 | `client/ui-conversation/src/client/chat/VoiceReplyNodeView.tsx`（**新增**）+ `conversation-nodes/voice-reply.ts` + 节点注册（register-node-renderers/register） | 注册 voice/reply 节点渲染器 | voice/reply 是独立持久化事件，官方消息流不认识它——不注册渲染器，语音回复就以"unknown surface"原始 JSON 显示 | ✅ |
+> | 20 | `client/ui-conversation/src/client/contract/slots.ts`（+92 行） | 新增 `conversation.chat.voice-actions` 槽声明 | 语音条要挂扩展 UI（插件的复制按钮等），**官方没有挂载点**，不声明槽插件挂不上去 | ✅ |
+> | 21 | `client/ui-conversation/src/client/apply.ts`、`service.ts`、`locales.ts`、`index.ts`、`ChatView.tsx` 等 | 配套：节点注册、语音文案翻译、服务扩展（resolveVoice 把语音对象读成播放 URL）、布局 | 上面 #17-20 渲染出来了还得能**真的播放**——读语音 URL 的接口、文案、注册都在这一层，缺一个语音条就是死的 | ✅ |
+> | 22 | `subprocess/subprocess-local/src/spawn.ts`、`shell/pwsh-local/src/index.ts` | 杀进程从裸 `taskkill` 改成 **System32 全路径 + PATH 兜底**双保险 | **nssm 服务的 PATH 快照缺 System32** → 裸 taskkill ENOENT 静默失败 → 挂起进程永远杀不掉，超时/停止全部失效（真实踩过的坑） | ✅ |
+> | 23 | `acp/acp/src/index.ts`（+95 行）、`api/remotes/src/client/index.ts` | ACP 扩展：流式思考（assistant/chunk reasoning-delta）→ `agent_thought_chunk`、工具事件 → `tool_call` 推送映射 | 外部 ACP 客户端（IDE 等）要**实时看到模型的思考过程和工具调用**，官方 ACP 不推这些事件 | ✅ |
+> | 24 | `host/directory-picker-auto/src/resolve.ts` | 加 `DSH_FORCE_BROWSE_PICKER=1` 环境变量 → 强制用 browse（网页目录树） | **Windows nssm 服务跑在 session 0，原生 IFileOpenDialog COM 弹窗没有交互桌面弹不出来**（"添加工作区"点了没反应，你亲测过的坑）。browse 是纯 HTTP 目录列表，session 0 完全可用 | ✅ |
+> | 25 | `compaction/command-compact`、`goal/command-goal`、`feedback/command-feedback`、`session-query/session-log-export`、`plan/plan-mode`、`interaction/permission-presets`、`client/modules`、`client/ui-theme` | **命令提示文案中文化**：/compact、/goal、/feedback、会话日志导出等命令的用法、错误提示从英文改成中文（+ 少量 import/声明调整） | 中文用户看英文命令反馈不友好——把所有用户看得见的命令反馈汉化 | ✅ |
+> | 26 | 前端 **client lib 重建流程**（`build:lib:client` + `build:web`） | 不是源码改动，是**构建流程**：改前端 src 后必须先 `build:lib:client` 再 `build:web` | 前端组件（ui-conversation/connection）是**运行时插件 lib**，apps/web 只是壳——只跑 build:web 用的旧 lib，图标位置/余额/语音前端面**全不生效**（实测踩坑：界面"毛变化没有"的根因） | ✅ |
 >
 > > ⚠️ 注：**这套体验只能在本项目代码上成立**——官方主线面向官方云模型，不会也不该接受这些改动（图片序列化、语音全链路、余额、事件类型、前端渲染层，跨 10+ 包、25+ 个文件）。
 
