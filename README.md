@@ -18,22 +18,34 @@
 >
 > | # | 文件 | 改了啥（大白话） | 为啥改 | 状态 |
 > |---|---|---|---|---|
-> | 1 | `packages/llm/llm-deepseek/src/serialize.ts` | 发图片不再报错拒绝，改成把图片转成一行"图片在本地哪个文件"的文字 | 纯文本模型收不到图，要给它图片路径文字，它才能调插件识图工具去看图 | ✅ |
-> | 2 | `packages/host/apiproxy/src/api-proxy.ts` | 发图时不再检查"这个模型支不支持图片"，一律放行 | 图是转成文字给模型的，模型不需要真的支持图 | ✅ |
-> | 3 | `packages/llm/llm-deepseek/src/adapter.ts` | 组装模型请求前，不再因为"模型不支持图"直接拒绝 | 这是最靠前的拦截点，不放行图根本走不到第 1 步的转换 | ✅ |
-> | 4 | `packages/host/apiproxy/src/api/sessions.ts` | 聊天接口的输入类型里加"语音"这种消息 | 官方不认语音消息，加上才能发原生语音 | ✅ |
-> | 5 | `packages/host/apiproxy/src/api/sessions.schema.ts` | 接口的校验规则加语音 | 跟第 4 条配套 | ✅ |
-> | 6 | `packages/host/apiproxy/src/api-proxy.ts` | 收到语音消息 → 自动存盘 + 本地识别成文字 | 官方不认识语音，要转成文字给模型看 | ✅ |
-> | 7 | `packages/llm/llm/src/types.ts` | 消息类型表里加"语音块" | 跟第 4 条配套 | ✅ |
-> | 8 | `packages/host/apiproxy/src/voice.ts`、`edge-tts.ts`（**新增**） | 从本地搬来语音存盘 / 识别 / 合成的基础代码 | 官方源码根本没有语音基础设施，整条链路是我们加的 | ✅ |
-> | 9 | `packages/llm/llm-deepseek/src/serialize.ts` | 语音消息转成"识别出的文字" | 模型看不懂语音，给它文字它才知道你说的啥 | ✅ |
-> | 10 | `packages/host/apiproxy/src/api/balance.ts`、`balance.schema.ts`（**新增**）+ `rpc-map.ts`、`api/index.ts`、`api-proxy.ts`、`fetch/client.ts`、`fetch/handler.ts`、`index.ts`、测试 mock 共 9 处 | 加"查余额"接口（RPC） | 官方没有查余额接口；**插件的余额显示只是界面，数据要调这个接口拿**，接口在源码里必须有 | ✅ |
-> | 11 | `packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` | 插件图标（图片/语音）从权限按钮后面挪到命令 `+` 前面 | 用户要求按钮顺序是 [🖼][🎙][+] | ✅ |
-> | 12 | `packages/host/apiproxy/package.json` | 加 `ws`、`@types/ws` 依赖 | Edge TTS 合成语音要连微软 WebSocket 服务 | ✅ |
-> | 13 | `packages/core/session/src/types.ts`、`known-event-types.ts` + `packages/host/apiproxy/src/api-proxy.ts` + `api/sessions.ts`、`sessions.schema.ts`、`rpc-map.ts`、`fetch/client.ts`、`fetch/handler.ts` + `packages/client/runtime/.../session.ts`、`contract/session.ts` + `packages/client/connection/.../api.ts`、`index.ts` + `api/index.ts` | 加"读语音对象"接口（`session.voice` RPC 全链路：host 读语音文件 → 客户端拿字节） | 前端要播放历史语音消息，得能从会话里把语音文件读回来 | ✅ 实测读回 257KB |
-> | 14 | 前端 **client lib 重建**（`build:lib:client` + `build:web`）：InputBar 图标位置、`balance.get`/`session.voice` 前端 API 面、测试 mock（fake-api/fixture 加 balance/voice/readVoice） | 之前只跑 `build:web` 用的是旧 lib——**前端改动全没生效**（图标位置没变、余额不显示的根因）。正确流程：改 ui-conversation/connection 等前端 src → 先 `build:lib:client` 再 `build:web` | 前端组件是运行时插件（lib/client.js），apps/web 只是壳 | ✅ 实测：语音回复触发 + 余额 RPC 3.31 |
+> | 1 | `llm/llm-deepseek/src/serialize.ts` | 发图片不再报错拒绝，改成把图片转成一行"图片在本地哪个文件"的文字 | 纯文本模型收不到图，要给它图片路径文字，它才能调插件识图工具去看图 | ✅ |
+> | 2 | `host/apiproxy/src/api-proxy.ts` | 发图时不再检查"这个模型支不支持图片"，一律放行 | 图是转成文字给模型的，模型不需要真的支持图 | ✅ |
+> | 3 | `llm/llm-deepseek/src/adapter.ts` + `llm/llm-pi-ai/src/adapter.ts` | 组装模型请求前，不再因为"模型不支持图"直接拒绝 | 这是最靠前的拦截点，不放行图根本走不到第 1 步的转换 | ✅ |
+> | 4 | `host/apiproxy/src/api/sessions.ts` | 聊天接口的输入类型里加"语音"这种消息 | 官方不认语音消息，加上才能发原生语音 | ✅ |
+> | 5 | `host/apiproxy/src/api/sessions.schema.ts` | 接口的校验规则加语音 | 跟第 4 条配套 | ✅ |
+> | 6 | `host/apiproxy/src/api-proxy.ts` | 收到语音消息 → 自动存盘 + 本地识别成文字；另加 `voiceAsr`/`voiceTts` 编辑器 RPC（转写/合成） | 官方不认识语音，要转成文字给模型看；编辑器里"语音转文字/文字转语音"也要接口 | ✅ |
+> | 7 | `llm/llm/src/types.ts` | 消息类型表里加"语音块" | 跟第 4 条配套 | ✅ |
+> | 8 | `host/apiproxy/src/voice.ts`、`edge-tts.ts`（**新增**，506+119 行） | 语音存盘 / 识别 / 合成的基础代码（含 Edge TTS 微软免费引擎） | 官方源码根本没有语音基础设施，整条链路是我们加的 | ✅ |
+> | 9 | `llm/llm-deepseek/src/serialize.ts` | 语音消息转成"识别出的文字" | 模型看不懂语音，给它文字它才知道你说的啥 | ✅ |
+> | 10 | `host/apiproxy/src/api/balance.ts`、`balance.schema.ts`（**新增**）+ `rpc-map.ts`、`api/index.ts`、`api-proxy.ts`、`fetch/client.ts`、`fetch/handler.ts`、`index.ts`、测试 mock 共 9 处 | 加"查余额"接口（RPC，直连 DeepSeek `/user/balance`，5 秒缓存） | 官方没有查余额接口；**插件的余额显示只是界面，数据要调这个接口拿**，接口在源码里必须有 | ✅ |
+> | 11 | `client/ui-conversation/src/client/skeleton/InputBar.tsx` | 插件图标（图片/语音）从权限按钮后面挪到命令 `+` 前面 | 用户要求按钮顺序是 [🖼][🎙][+] | ✅ |
+> | 12 | `host/apiproxy/package.json` | 加 `ws`、`@types/ws` 依赖 | Edge TTS 合成语音要连微软 WebSocket 服务 | ✅ |
+> | 13 | `core/session/src/types.ts`、`known-event-types.ts` | 加 `voice` / `reply` 会话事件类型 | 语音消息/语音回复要独立持久化；插件 append 事件必须用它 | ✅ |
+> | 14 | `host/apiproxy`（api-proxy + api/sessions.ts、sessions.schema.ts、rpc-map.ts、fetch/client.ts、fetch/handler.ts）+ `client/runtime`（session.ts、contract/session.ts）+ `client/connection`（api.ts、index.ts）+ `api/remotes` | 加"读语音对象"接口（`session.voice` RPC 全链路：host 读语音文件 → 客户端拿字节播放） | 前端要播放历史语音消息，得能从会话里把语音文件读回来 | ✅ 实测读回 257KB |
+> | 15 | `llm/llm-pi-ai/src/context.ts`、`adapter.ts`、`catalog.ts` | pi-ai 模型路由同样把图片转文字 + 模型目录加识图说明 | 与 deepseek 路由一致，**任何入口**的图都不丢 | ✅ |
+> | 16 | `attachment/attachment-local/src/store.ts`、`attachment/attachment/src/error.ts` | 附件落盘补**扩展名别名**：sha256 内容寻址（无扩展名）→ jpg/png 硬链接、webp 用 sharp 转 png | 官方存储是 sha256 内容寻址**没扩展名**（源头设计，改不了）；路径文本要带扩展名，插件识图工具才能读到物理文件 | ✅ |
+> | 17 | `client/ui-conversation/src/client/chat/MessageItem.tsx`（+278 行） | 语音消息气泡：可点击播放、尾部复制转写文本、微信式互斥（同一时刻只播一条） | 语音消息要在聊天里显示成气泡 | ✅ |
+> | 18 | `client/ui-conversation/src/client/chat/TtsVoiceCard.tsx`（**新增** 67 行） | AI 语音回复卡片（base64 转 Blob 播放） | AI 语音回复的展示 | ✅ |
+> | 19 | `client/ui-conversation/src/client/chat/VoiceReplyNodeView.tsx`（**新增**）+ `conversation-nodes/voice-reply.ts` + 节点注册（register-node-renderers/register） | 注册 voice/reply 节点渲染器 | 语音回复要独立渲染成一条 | ✅ |
+> | 20 | `client/ui-conversation/src/client/contract/slots.ts`（+92 行） | 加 `voice-actions` 槽声明 | 给语音条留扩展 UI 挂载点（插件复制按钮等） | ✅ |
+> | 21 | `client/ui-conversation/src/client/apply.ts`、`service.ts`、`locales.ts`、`index.ts`、`ChatView.tsx` 等 | 配套：节点注册、文案、布局 | 前端整体衔接语音功能 | ✅ |
+> | 22 | `subprocess/subprocess-local/src/spawn.ts`、`shell/pwsh-local/src/index.ts` | 杀进程用 taskkill 全路径兜底 | Windows 下杀子进程更稳 | ✅ |
+> | 23 | `acp/acp/src/index.ts`（+95 行）、`api/remotes/src/client/index.ts` | ACP 扩展 + remotes 导出配套 | 本地改造配套 | ✅ |
+> | 24 | `host/directory-picker-auto/src/resolve.ts` | 目录选择支持 `DSH_FORCE_BROWSE_PICKER=1` 强制网页浏览 | 远程/服务会话（nssm）里系统原生弹窗弹不出来 | ✅ |
+> | 25 | `compaction/command-compact`、`feedback/command-feedback`、`goal/command-goal`、`plan/plan-mode`、`session-query/session-log-export`、`interaction/permission-presets`、`client/modules`、`client/ui-theme` | 各 10~60 行小改 | 与语音/图片事件配套 | ✅ |
+> | 26 | 前端 **client lib 重建流程**（`build:lib:client` + `build:web`） | 前端组件（ui-conversation/connection 等）是**运行时插件 lib**，改完 src 必须先 `build:lib:client` 再 `build:web` 才生效 | 之前只跑 `build:web` 用的旧 lib，图标位置/余额/语音前端面**全没生效**（实测过的坑） | ✅ |
 >
-> 详细版本（含每处提交号）：[docs/LOCAL-MODIFICATIONS.md](docs/LOCAL-MODIFICATIONS.md)
+> > ⚠️ 注：**这套体验只能在本项目代码上成立**——官方主线面向官方云模型，不会也不该接受这些改动（图片序列化、语音全链路、余额、事件类型、前端渲染层，跨 10+ 包、25+ 个文件）。
 
 > 只想用官方原版？见[官方仓库](https://github.com/deepseek-ai/deepseek-harness)。
 > 注意：官方版是快速迭代的开发者预览版，且**没有本项目的语音功能**（语音能力来自本项目的插件）。
