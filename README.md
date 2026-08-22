@@ -39,12 +39,26 @@
 
 ### 方式 A：Windows
 
-**前置准备**（没有才装，已装跳过）：
-1. [Git](https://git-scm.com/download/win)
-2. [Node.js](https://nodejs.org/)（要求 **22.19 或更高**，24 也可以）
-3. pnpm：装好 Node 后，在 PowerShell 里运行 `npm install -g pnpm`
+**前置准备**（没有才装，已装跳过。在 PowerShell 里逐条复制运行）：
 
-装好后，打开 PowerShell，**整段复制运行**：
+```powershell
+# 1. Git（版本管理工具）
+winget install --id Git.Git -e --source winget
+
+# 2. Node.js（自带 npm；要求 22.19 或更高，24 也可以）
+winget install --id OpenJS.NodeJS.LTS -e --source winget
+
+# 3. 装完 Node.js 后【重开 PowerShell】让命令生效，然后装 pnpm
+npm install -g pnpm
+```
+
+装完检查一下（应该都能打印出版本号，没有就重开终端再试）：
+
+```powershell
+git --version; node -v; npm -v; pnpm -v
+```
+
+然后**整段复制运行**下面的安装步骤：
 
 ```powershell
 # 1. 下载代码
@@ -65,8 +79,21 @@ node --import tsx/esm apps/cli/src/bin.ts web --no-open --port 3080
 
 ### 方式 B：Linux / macOS
 
+**前置准备**（没有才装，已装跳过）：
+
 ```bash
-# 前置：Git、Node.js（>=22.19）、pnpm（npm install -g pnpm）
+# Debian / Ubuntu：
+sudo apt update && sudo apt install -y git
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt install -y nodejs
+# macOS（需先装 Homebrew，见 https://brew.sh）：
+#   brew install git node
+# 装完 Node.js 后（npm 随 Node 自带）：
+npm install -g pnpm
+```
+
+然后**整段复制运行**：
+
+```bash
 git clone https://github.com/oadank/deepseek-harness.git
 cd deepseek-harness
 pnpm install
