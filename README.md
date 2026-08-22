@@ -13,6 +13,8 @@
 本项目基于官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（MIT 协议）二次开发，语音能力来自独立插件 [@oadank/dsh-input-tools](https://github.com/oadank/dsh-input-tools)。
 
 > **为什么本项目要改官方源码？** 官方 dsh 对图片/语音只有一个态度：模型支持就直接发，不支持就报错——纯文本模型（如 deepseek-v4-flash）**根本用不了图片和语音**。外置插件（如 modlens）可以不改源码，但只能靠"粘贴时把图转成路径文本"这一个入口，覆盖不到普通发图/语音带图/历史回放，聊天里也失去标准图片消息。本项目在框架层把图片块统一转成"本地附件路径文本"（`serialize.ts` 等）并移除官方"模型不支持图片即拒绝"的闸门，让**任何入口**的图片/语音都能被文本模型用插件工具识别，同时保留完整图片消息体验。详见[插件 README 架构说明](https://github.com/oadank/dsh-input-tools)。
+>
+> 📋 **改了哪些源码、为什么改**：完整清单见 [docs/LOCAL-MODIFICATIONS.md](docs/LOCAL-MODIFICATIONS.md)（按 图片/语音/余额/基础设施 分类，每个文件标注改动原因与提交号）。
 
 > 只想用官方原版？见[官方仓库](https://github.com/deepseek-ai/deepseek-harness)。
 > 注意：官方版是快速迭代的开发者预览版，且**没有本项目的语音功能**（语音能力来自本项目的插件）。
