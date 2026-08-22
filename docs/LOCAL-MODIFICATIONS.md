@@ -33,41 +33,40 @@
 
 ---
 
-## 二、语音（"耳朵" + "嘴巴"）—— 录音输入 / TTS / 音色克隆 / AI 语音回复
+## 二、语音（"耳朵" + "嘴巴"）
 
-### 2.1 Host 服务端（新增最多）
-| 文件 | 改动 | 为什么 |
+> ⚠️ **能力层已在插件**（api-proxy 第 1494 行注释为证："语音能力已迁移至插件 @anoslide/dsh-host-voice"）：
+> `send_voice` 工具、turn/end 自动语音回复（三规则）、TTS 引擎、ASR、音色克隆——**全部在插件 dsh-input-tools**，源码 api-proxy 里三规则代码已删除（`userSpokeVoice`/`语音铁律` 零匹配）。
+> 源码保留的只有**插件替代不了的管道层**：
+
+### 2.1 源码 = 底层管道（插件调用的基础设施）
+| 文件 | 改动 | 为什么必须留源码 |
 |---|---|---|
-| `packages/host/apiproxy/src/voice.ts` | **新增 506 行**：语音对象落盘（与附件同池 sha256 寻址）、转 WAV 调本地 sherpa-onnx ASR 转写、TTS 合成、转写失败不阻塞消息 | 官方不认识"语音消息"，整条语音链路都是新增 |
-| `packages/host/apiproxy/src/edge-tts.ts` | **新增 119 行**：Edge TTS 引擎（微软免费） | 免费 TTS 引擎之一 |
-| `packages/host/apiproxy/src/api-proxy.ts` | **+413 行**：①语音三规则（用户发过语音→自动 TTS 回复；用户要求/指定服务商→自动合成；否则 agent 自主决定 send_voice）；②`send_voice` 工具；③余额 RPC 接入；④图片准入配套 | 让 AI 能主动发语音、行为符合人设规则 |
-| `packages/host/apiproxy/src/api/balance.ts`、`balance.schema.ts` | 新增余额查询 RPC（DeepSeek 直连 `/user/balance`，5 秒缓存，失败返回 null 不报错） | 直连模型显示余额 |
-| `packages/host/apiproxy/src/api/sessions.ts`、`sessions.schema.ts` | 会话 RPC 扩展（+72/+61 行） | 配套 |
-| `packages/host/apiproxy/src/api/index.ts`、`rpc-map.ts` | 注册 balance/sessions RPC | 配套 |
-| `packages/host/apiproxy/src/fetch/client.ts`、`handler.ts`、`index.ts` | 配套 | 配套 |
-| `packages/host/apiproxy/package.json` | 依赖变更 | 配套 |
-| `packages/core/session/src/types.ts`、`known-event-types.ts` | 新增 `voice` / `reply` 会话事件类型 | 语音消息/语音回复独立持久化 |
-| `packages/llm/llm/src/types.ts` | +24 行（voice 相关内容块类型） | 配套 |
+| `packages/host/apiproxy/src/voice.ts` | 新增 506 行：语音对象落盘（sha256 内容寻址）、转 WAV 调本地 sherpa-onnx ASR、TTS 合成、`voiceAsr`/`voiceTts` 编辑器 RPC | 语音消息的**存储/转写管道**，浏览器录音落盘、消息持久化都在这一层，插件只能调 RPC 不能用 |
+| `packages/host/apiproxy/src/api/balance.ts`、`balance.schema.ts` | 新增余额查询 RPC（DeepSeek 直连 `/user/balance`，5 秒缓存） | **插件余额显示调的就是它**（`connection.api.balance.get`），不是重复实现 |
+| `packages/host/apiproxy/src/api-proxy.ts` | 余额 RPC 接入 + `voiceAsr`/`voiceTts` RPC + 图片准入配套 | 注：语音三规则已迁插件，本文件的语音部分只剩 RPC 管道 |
+| `packages/host/apiproxy/src/api/sessions.ts`、`sessions.schema.ts`、`rpc-map.ts`、`index.ts` | 会话 RPC 扩展 | 配套 |
+| `packages/core/session/src/types.ts`、`known-event-types.ts` | 新增 `voice`/`reply` 会话事件类型 | 会话事件类型是框架契约，插件 append 事件必须用它 |
+| `packages/llm/llm/src/types.ts` | +24 行（voice 内容块类型） | 消息内容块类型，插件改不了 |
 
 ### 2.2 客户端 RPC
-| 文件 | 改动 | 为什么 |
+| 文件 | 改动 | 为什么必须留源码 |
 |---|---|---|
-| `packages/client/runtime/src/client/contract/session.ts`、`sessions/session.ts` | `sendVoiceMessage` RPC、voice/reply 事件进 SessionEventMap | 前端能发语音、收语音事件 |
+| `packages/client/runtime/src/client/contract/session.ts`、`sessions/session.ts` | `sendVoiceMessage` RPC、voice/reply 事件进 SessionEventMap | 前端收语音事件的通道，插件 client 靠它 |
 | `packages/client/connection/src/client/api.ts`、`index.ts`、`fixture.ts`、`api-request-trust.ts` | RPC 面扩展 / trusted-host | 配套 |
 
-### 2.3 前端：**按钮层已插件化，消息渲染层在源码**
-> ⚠️ **重要实况（2026-08-22 核对）**：输入框的 **图片/语音/余额按钮已全部迁移至插件** `@oadank/dsh-client-composer`（InputBar.tsx 顶部注释为证："源码 InputBar 不再持有图片/语音 UI"）。但**聊天消息渲染层仍在源码**（diff 为证）。
+### 2.3 前端渲染层（历史遗留，可评估是否插件化）
+> 输入框**按钮层已插件化**（InputBar 注释为证）。以下是**消息渲染层**——语音消息要在官方消息流里显示成气泡/卡片，需在渲染树注册节点，插件挂 UI 可以、改渲染树有风险，故留在源码：
 
-| 文件 | 改动 | 为什么 |
-|---|---|---|
-| `packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` | 仅保留：取消"切会话/挂载自动聚焦"、语音按钮按下 releaseFocus（移动端不弹输入法） | 按钮 UI 已插件化，源码只留焦点/交互细节 |
-| `packages/client/ui-conversation/src/client/chat/MessageItem.tsx` | **+278 行**：语音消息气泡（可点击播放、尾部复制转写）、微信式语音互斥（同时只播一条）、录音互斥 | 语音消息可视化 |
-| `packages/client/ui-conversation/src/client/chat/TtsVoiceCard.tsx` | **新增 67 行**：AI 语音回复卡片（base64 转 Blob 播放） | 语音回复展示 |
-| `packages/client/ui-conversation/src/client/chat/VoiceReplyNodeView.tsx` | 新增 20 行 | 语音回复节点渲染 |
-| `packages/client/ui-conversation/src/client/chat/register-node-renderers.ts`、`conversation-nodes/voice-reply.ts`、`register.ts` | 注册 voice/reply 节点渲染器 | 语音消息独立渲染 |
-| `packages/client/ui-conversation/src/client/contract/slots.ts` | 新增 `conversation.chat.voice-actions` 槽声明（+92 行） | 语音条扩展 UI 挂载点 |
-| `packages/client/ui-conversation/src/client/apply.ts`、`service.ts`、`locales.ts`、`index.ts`、`ChatView.tsx`、`ChatNodeSeat.tsx`、`ReasoningRow.tsx`、`ConversationSession.tsx` | 配套：节点注册、文案、布局 | 前端整体衔接语音 |
-| `packages/client/ui-renderer/src/client/DocumentTitle.tsx`、`packages/client/ui-sidebar/src/client/SidebarRoot.tsx` | 界面配套 | 配套 |
+| 文件 | 改动 |
+|---|---|
+| `packages/client/ui-conversation/src/client/chat/MessageItem.tsx` | +278 行：语音消息气泡（播放/复制转写/互斥） |
+| `packages/client/ui-conversation/src/client/chat/TtsVoiceCard.tsx` | 新增 67 行：AI 语音回复卡片 |
+| `packages/client/ui-conversation/src/client/chat/VoiceReplyNodeView.tsx` | 新增 20 行 |
+| `packages/client/ui-conversation/src/client/conversation-nodes/voice-reply.ts`、`register-node-renderers.ts`、`register.ts` | 注册 voice/reply 节点渲染器 |
+| `packages/client/ui-conversation/src/client/contract/slots.ts` | voice-actions 槽（+92 行） |
+| `packages/client/ui-conversation/src/client/apply.ts`、`service.ts`、`locales.ts`、`index.ts` | 配套：节点注册、文案 |
+| `packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` | 仅 releaseFocus + 取消自动聚焦（按钮 UI 已插件化） |
 
 ---
 
