@@ -14,7 +14,32 @@
 
 > **为什么本项目要改官方源码？** 官方 dsh 对图片/语音只有一个态度：模型支持就直接发，不支持就报错——纯文本模型（如 deepseek-v4-flash）**根本用不了图片和语音**。外置插件（如 modlens）可以不改源码，但只能靠"粘贴时把图转成路径文本"这一个入口，覆盖不到普通发图/语音带图/历史回放，聊天里也失去标准图片消息。本项目在框架层把图片块统一转成"本地附件路径文本"（`serialize.ts` 等）并移除官方"模型不支持图片即拒绝"的闸门，让**任何入口**的图片/语音都能被文本模型用插件工具识别，同时保留完整图片消息体验。详见[插件 README 架构说明](https://github.com/oadank/dsh-input-tools)。
 >
-> 📋 **改了哪些源码、为什么改**：完整清单见 [docs/LOCAL-MODIFICATIONS.md](docs/LOCAL-MODIFICATIONS.md)（按 图片/语音/余额/基础设施 分类，每个文件标注改动原因与提交号）。
+> 📋 **源码修改记录表**（每次测试/改动，都更新这张表；大白话版）：
+>
+> | # | 文件 | 改了啥（大白话） | 为啥改 | 状态 |
+> |---|---|---|---|---|
+> | 1 | `packages/llm/llm-deepseek/src/serialize.ts` | 发图片不再报错拒绝，改成把图片转成一行"图片在本地哪个文件"的文字 | 纯文本模型收不到图，要给它图片路径文字，它才能调插件识图工具去看图 | ✅ |
+> | 2 | `packages/host/apiproxy/src/api-proxy.ts` | 发图时不再检查"这个模型支不支持图片"，一律放行 | 图是转成文字给模型的，模型不需要真的支持图 | ✅ |
+> | 3 | `packages/llm/llm-deepseek/src/adapter.ts` | 组装模型请求前，不再因为"模型不支持图"直接拒绝 | 这是最靠前的拦截点，不放行图根本走不到第 1 步的转换 | ✅ |
+> | 4 | `packages/host/apiproxy/src/api/sessions.ts` | 聊天接口的输入类型里加"语音"这种消息 | 官方不认语音消息，加上才能发原生语音 | ✅ |
+> | 5 | `packages/host/apiproxy/src/api/sessions.schema.ts` | 接口的校验规则加语音 | 跟第 4 条配套 | ✅ |
+> | 6 | `packages/host/apiproxy/src/api-proxy.ts` | 收到语音消息 → 自动存盘 + 本地识别成文字 | 官方不认识语音，要转成文字给模型看 | ✅ |
+> | 7 | `packages/llm/llm/src/types.ts` | 消息类型表里加"语音块" | 跟第 4 条配套 | ✅ |
+> | 8 | `packages/host/apiproxy/src/voice.ts`、`edge-tts.ts`（**新增**） | 从本地搬来语音存盘 / 识别 / 合成的基础代码 | 官方源码根本没有语音基础设施，整条链路是我们加的 | ✅ |
+> | 9 | `packages/llm/llm-deepseek/src/serialize.ts` | 语音消息转成"识别出的文字" | 模型看不懂语音，给它文字它才知道你说的啥 | ✅ |
+> | 10 | `packages/host/apiproxy/src/api/balance.ts`、`balance.schema.ts`（**新增**）+ `rpc-map.ts`、`api/index.ts`、`api-proxy.ts`、`fetch/client.ts`、`fetch/handler.ts`、`index.ts`、测试 mock 共 9 处 | 加"查余额"接口（RPC） | 官方没有查余额接口；**插件的余额显示只是界面，数据要调这个接口拿**，接口在源码里必须有 | ✅ |
+> | 11 | `packages/client/ui-conversation/src/client/skeleton/InputBar.tsx` | 插件图标（图片/语音）从权限按钮后面挪到命令 `+` 前面 | 用户要求按钮顺序是 [🖼][🎙][+] | ✅ |
+> | 12 | `packages/host/apiproxy/package.json` | 加 `ws`、`@types/ws` 依赖 | Edge TTS 合成语音要连微软 WebSocket 服务 | ✅ |
+>
+> **插件改动（不是源码，是 `@oadank/dsh-input-tools` 插件的代码，三处副本同步：源码仓库 + 3080 运行时 + 3081 运行时）**：
+>
+> | # | 改的啥（大白话） | 为啥 |
+> |---|---|---|
+> | P1 | `lib/index.js`：自动语音回复规则，以前只认"语音块"，现在**文本以【用户语音】开头也触发语音回复** | 降级场景下语音会变成【用户语音】文字，规则也要认它 |
+>
+> **还在路上**：官方前端不渲染语音消息（显示成原始 JSON、AI 语音回复无条幅）——需要把本地的语音消息渲染层（MessageItem 气泡 / TtsVoiceCard / VoiceReplyNodeView 等约 6-8 个文件）搬到官方前端，是最大的一块。
+>
+> 详细版本（含每处提交号）：[docs/LOCAL-MODIFICATIONS.md](docs/LOCAL-MODIFICATIONS.md)
 
 > 只想用官方原版？见[官方仓库](https://github.com/deepseek-ai/deepseek-harness)。
 > 注意：官方版是快速迭代的开发者预览版，且**没有本项目的语音功能**（语音能力来自本项目的插件）。
