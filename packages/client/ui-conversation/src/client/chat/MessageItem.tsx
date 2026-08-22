@@ -529,6 +529,36 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
   )
 })
 
+/**
+ * [2026-08-22 修] steering（插队消息）专用视图：与 user 共用 UserStyleBubble 外观，
+ * 但不渲染 user-actions/voice-actions 子槽——槽名全局唯一、只能由 user entry 声明一次；
+ * 此前两个 entry 重复声明子槽导致 steering 渲染器注册失败，插队消息不显示。
+ * 保留标准操作行（复制/时间），只是不带 user-actions 槽注入的扩展按钮。
+ */
+export const SteeringNodeView = memo(function SteeringNodeView({
+  node, renderMessageImages, loadVoice, t,
+}: ChatNodeViewProps<'steering'>) {
+  const data = node.data
+  return (
+    <UserStyleBubble
+      content={data.content}
+      renderMessageImages={renderMessageImages}
+      voiceLoader={loadVoice}
+      {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
+      t={t}
+      actions={text => (
+        <MessageIconActions
+          text={text}
+          time={data.time}
+          clock="start"
+          className={css.actions}
+          t={t}
+        />
+      )}
+    />
+  )
+})
+
 /** Injected-context keyed Chat renderer. */
 export const ContextMessageNodeView = memo(function ContextMessageNodeView({ node, t }: ChatNodeViewProps<'context'>) {
   const data = node.data

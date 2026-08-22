@@ -3,8 +3,8 @@ import { NS } from '../locales.ts'
 import { AssistantNodeView } from './AssistantNodeView.tsx'
 import { CommandNodeView, ManualCompactionNodeView } from './CommandNodeView.tsx'
 import {
-  CompactionNodeView, ContextMessageNodeView, RetryNodeView, TurnErrorNodeView,
-  TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
+  CompactionNodeView, ContextMessageNodeView, RetryNodeView, SteeringNodeView,
+  TurnErrorNodeView, TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
 } from './MessageItem.tsx'
 import { TurnTailNodeView } from './TurnTailNodeView.tsx'
 import { VoiceReplyNodeView } from './VoiceReplyNodeView.tsx'
@@ -23,15 +23,10 @@ export function registerChatNodeRenderers(ctx: Context): void {
       'conversation.chat.voice-actions': { kind: 'list', scope: 'session' },
     },
   }, UserMessageNodeView))
-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
-    name: 'conversation.chat.node',
-    key: 'steering',
-    locale: NS,
-    children: {
-      'conversation.chat.user-actions': { kind: 'list', scope: 'session' },
-      'conversation.chat.voice-actions': { kind: 'list', scope: 'session' },
-    },
-  }, UserMessageNodeView))
+  // [2026-08-22 修] steering 用独立 SteeringNodeView（无子槽）——user-actions/voice-actions
+  // 只能由 user entry 声明一次；此前 steering 重复声明导致注册抛错、插队消息不显示。
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+    { name: 'conversation.chat.node', key: 'steering', locale: NS }, SteeringNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
     { name: 'conversation.chat.node', key: 'context', locale: NS }, ContextMessageNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
