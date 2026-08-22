@@ -9,8 +9,9 @@
 
 本项目基于官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（MIT 协议）二次开发，语音能力来自独立插件 [@oadank/dsh-input-tools](https://github.com/oadank/dsh-input-tools)。
 
-> 只想用官方原版？直接 `npx @deepseek-ai/dsh web`，或看[官方仓库](https://github.com/deepseek-ai/deepseek-harness)。
-> 下面的语音功能是本项目（fork + 插件）加的，官方原版没有。
+> 只想用官方原版？见[官方仓库](https://github.com/deepseek-ai/deepseek-harness)。
+> 注意：官方版是快速迭代的开发者预览版，且**没有本项目的语音功能**（语音能力来自本项目的插件）。
+> 本项目的安装见下文「一、安装」，按步骤装完就是正式安装，不会丢。
 
 ## 界面预览
 
