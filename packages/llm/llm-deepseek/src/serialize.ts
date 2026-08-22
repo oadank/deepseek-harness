@@ -95,7 +95,7 @@ function imageAsText(block: ContentBlock): ContentBlock {
   const path = hex.length > 0 && home !== ''
     ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex) + ext
     : '(unknown)'
-  return { type: 'text', text: `[用户发送了一张图片，名称 "${name}"，类型 ${mediaType}，本地路径 ${path}。识图请优先调用 modlens_read_image 工具（path 参数填这个路径，普通描述可传简短 prompt 如"简要描述这张图"）。若用户要求像素级反推/详细复现描述：先读取文件 ${join(home, 'visionqa-reverse-prompt.txt')}，把该文件内容作为 prompt 参数传给 modlens_read_image。仅当 modlens_read_image 不可用时，才改用 mcp__visionqa__look 或 mcp__zai-vision__analyze_image]` }
+  return { type: 'text', text: `[用户发送了一张图片，名称 "${name}"，类型 ${mediaType}，本地路径 ${path}。请调用 look_image 工具识别这张图片（image_path 参数填这个路径）：默认 describe=看图描述；用户要求像素级反推/详细复现/转成生图提示词时用 task="reverse"；要求提取图中文字时用 task="text"。]` }
 }
 
 function imagesAsText(blocks: readonly ContentBlock[]): ContentBlock[] {
