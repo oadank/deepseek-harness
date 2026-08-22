@@ -484,9 +484,9 @@ window.__ModuleLoader__.load({
       { key: "lazy", label: "慵懒", ctx: "用慵懒、松弛的语气，语速慢悠悠，声音松散，气息不紧不慢，漫不经心" },
       { key: "deep", label: "深沉", ctx: "用深沉、厚重的语气，若有所思，语速稳中有顿挫，声音偏低，字字有分量" },
     ];
-    const ENGINES_ORDER = ["edge", "xiaomi", "voiceclone", "local", "ali"];
+    const ENGINES_ORDER = ["edge", "xiaomi", "voicedesign", "voiceclone", "local", "ali"];
     const ENGINE_LABELS = {
-      edge: "微软 edge（免费）", xiaomi: "小米 MiMo", voiceclone: "小米克隆（VoiceClone）", local: "本地 TTS", ali: "阿里 qwen3-tts",
+      edge: "微软 edge（免费）", xiaomi: "小米 MiMo", voicedesign: "小米语音设计（VoiceDesign）", voiceclone: "小米克隆（VoiceClone）", local: "本地 TTS", ali: "阿里 qwen3-tts",
     };
     const MIMO_DOC_URL = "https://mimo.mi.com/models/zh-CN/mimo-v2.5-tts";
     // VoiceDesign 官方示例（音色设计：Instruct=音色描述/导演指令，Text=要朗读的文本）
@@ -512,9 +512,11 @@ window.__ModuleLoader__.load({
     // [本地改造 2026-08-21] 所有克隆音色的统一试听文本（与每个样本自己的风格指令配合，
     // 试听时能同时听出"音色+个性"；如小团团样本的指令让它念这句时自然带沙雕可爱腔）
     const CLONE_PREVIEW_TEXT = "喂喂喂！你怎么才来呀？我都等你老半天啦！我跟你说啊——你今天可不能凶我哦，因为……因为你又不娶我，哼！不过嘛，看在你这么乖的份上，本小姐今天心情好，就大发慈悲原谅你啦！嘿嘿嘿～走吧走吧，出发喽！";
+    // [本地改造 2026-08-22] 自带默认样本 id（小团团）：禁止删除、有预生成合成试听录音
+    const BUNDLED_CLONE_ID = "8da38fcc-b041-4f5b-86b9-901956016f89";
 
     const vInput = {
-      background: "var(--dsw-specific-input-fill,#1e2128)", color: "var(--dsw-alias-label-primary,#e6e9ef)",
+      background: "var(--dsw-specific-input-major,#ffffff)", color: "var(--dsw-alias-label-primary,#e6e9ef)",
       border: "1px solid var(--dsw-alias-border-l1,#333a45)", borderRadius: "6px",
       padding: "6px 10px", fontSize: "12.5px", fontFamily: "inherit", width: "100%",
       boxSizing: "border-box",
@@ -556,6 +558,9 @@ window.__ModuleLoader__.load({
       const [rulesHover, setRulesHover] = useState(false);
       const [cloneListTipPinned, setCloneListTipPinned] = useState(false);
       const [cloneListTipHover, setCloneListTipHover] = useState(false);
+      // [本地改造 2026-08-22] 克隆音色「?」弹层：显示该音色默认沟通指令 + 试听文本（用户想看到，之前是隐藏的）
+      const [cloneInfoId, setCloneInfoId] = useState(null);   // 当前展开信息的样本 id（hover 或 pinned）
+      const [cloneInfoPinned, setCloneInfoPinned] = useState(false);
       const [designTipPinned, setDesignTipPinned] = useState(false);
       const [designTipHover, setDesignTipHover] = useState(false);
       const [asrTipPinned, setAsrTipPinned] = useState(false);
@@ -576,6 +581,9 @@ window.__ModuleLoader__.load({
       const [asrResult, setAsrResult] = useState(null); // { ok, text, busy } | null
       // [本地改造 2026-08-21] 克隆样本添加（选择音频 → 上传 → 命名）
       const [cloneName, setCloneName] = useState("");
+      // [本地改造 2026-08-22] 添加克隆音色还需提供：指令（默认沟通语气）+ 文本（试听念的内容）
+      const [cloneContext, setCloneContext] = useState("");
+      const [clonePreviewText, setClonePreviewText] = useState("");
       const [addingClone, setAddingClone] = useState(false);
       const [cloneAddMsg, setCloneAddMsg] = useState(null); // { ok, text } | null
       const cloneFileRef = useRef(null);
@@ -693,12 +701,17 @@ window.__ModuleLoader__.load({
               name: cloneName.trim() !== "" ? cloneName.trim() : file.name.replace(/\.(mp3|wav)$/i, ""),
               audioBase64: data,
               mediaType: file.type || "audio/wav",
+              // [本地改造 2026-08-22] 提供 3 样：指令（默认沟通语气）+ 文本（试听内容）+ 样本音频
+              context: cloneContext,
+              previewText: clonePreviewText,
             }),
           });
           const d = await r.json();
           if (d?.ok) {
             setCloneAddMsg({ ok: true, text: "已添加克隆音色「" + d.sample.name + "」，如需默认使用，在「默认语音引擎」选「小米克隆」即可" });
             setCloneName("");
+            setCloneContext("");
+            setClonePreviewText("");
             // [本地改造 2026-08-21] 以服务端返回的 config 为准刷新（含新增样本），避免本地拼装丢字段
             if (d.config) setConfig(d.config);
           } else {
@@ -724,6 +737,7 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({
             engine, voice: voice ?? undefined, context: context ?? undefined, samplePath: samplePath ?? undefined,
             text: extra?.text ?? undefined, cmd: extra?.cmd ?? undefined, url: extra?.url ?? undefined,
+            cloneContext: extra?.cloneContext ?? undefined, // [2026-08-22] 克隆试听可带样本自带指令
           }),
         })
           .then((r) => r.json())
@@ -768,6 +782,33 @@ window.__ModuleLoader__.load({
           audio.onerror = () => { if (previewTagRef.current === tag) setPreviewing(null); };
           audio.play().catch(() => { if (previewTagRef.current === tag) setPreviewing(null); });
         } catch { if (previewTagRef.current === tag) setPreviewing(null); }
+      };
+
+      // [本地改造 2026-08-22] 播放合成试听录音：默认样本=预生成静态文件（免联网，和 VoiceDesign 官方示例同类）；
+      // 没有预生成录音（自建样本）→ 回退在线合成，并带上该样本自己的指令/文本
+      const playBakedPreview = async (sp, tag) => {
+        if (previewRef.current !== null) { previewRef.current.pause(); previewRef.current = null; }
+        previewTagRef.current = tag;
+        setPreviewing(tag);
+        setPreviewErr(null);
+        try {
+          const r = await fetch("/voice-config/voice-clone/preview-sample?id=" + encodeURIComponent(sp.id));
+          const d = await r.json();
+          if (!d?.ok) {
+            previewTagRef.current = null;
+            setPreviewing(null);
+            previewVoice("voiceclone", undefined, undefined, sp.path, tag, {
+              text: (sp.previewText && sp.previewText.trim() !== "") ? sp.previewText : CLONE_PREVIEW_TEXT,
+              cloneContext: (sp.context && sp.context.trim() !== "") ? sp.context : "",
+            });
+            return;
+          }
+          const audio = new Audio("data:" + d.mediaType + ";base64," + d.data);
+          previewRef.current = audio;
+          audio.onended = () => { if (previewTagRef.current === tag) setPreviewing(null); };
+          audio.onerror = () => { if (previewTagRef.current === tag) setPreviewing(null); setPreviewErr("音频加载失败（试听录音可能已损坏）"); };
+          audio.play().catch(() => { if (previewTagRef.current === tag) setPreviewing(null); });
+        } catch (e) { if (previewTagRef.current === tag) setPreviewing(null); setPreviewErr(String(e?.message ?? e)); }
       };
 
       const previewBtn = (tag, label, onClick, icon) => h("button", {
@@ -886,7 +927,7 @@ window.__ModuleLoader__.load({
           style: {
             position: "absolute", ...(place === "top" ? { bottom: "calc(100% + 6px)" } : { top: "calc(100% + 6px)" }), zIndex: 60,
             ...(align === "right" ? { right: "0", left: "auto" } : align === "center" ? { left: "50%", transform: "translateX(-50%)" } : { left: "0", right: "auto" }),
-            background: "var(--dsw-specific-input-fill,#1e2128)",
+            background: "var(--dsw-specific-input-major,#ffffff)",
             border: "1px solid var(--dsw-alias-border-l1,#333a45)", borderRadius: "8px",
             padding: "10px 12px", boxShadow: "0 8px 24px rgba(0,0,0,.35)",
             fontSize: "12px", lineHeight: "1.7", color: "var(--dsw-alias-label-secondary,#9aa3ad)",
@@ -894,6 +935,41 @@ window.__ModuleLoader__.load({
           },
         }, text) : null,
       );
+      // [本地改造 2026-08-22] 克隆音色「?」：上方弹出、向右展开，展示“默认沟通指令”与“试听文本”，让用户直观看到该克隆音默认用什么语气沟通、试听念的是哪句
+      const cloneInfoTip = (sp) => {
+        const active = cloneInfoId === sp.id;
+        const instruct = (sp.context && sp.context.trim() !== "") ? sp.context.trim() : "（该样本未单独设置指令，使用全局默认指令）";
+        return h("span", { style: { position: "relative", display: "inline-flex", alignItems: "center", flex: "none" } },
+          h("button", {
+            type: "button", "aria-label": "查看语音指令与试听文本", title: "查看语音指令与试听文本",
+            style: {
+              border: "none", borderRadius: "999px", width: "18px", height: "18px", padding: "0",
+              background: (active && cloneInfoPinned) ? "var(--vk-accent,#4b6fff)" : "rgba(128,128,128,.15)",
+              color: "inherit", cursor: "pointer", fontSize: "10px", fontWeight: 700,
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+            },
+            onMouseDown: (e) => e.preventDefault(),
+            onMouseEnter: () => setCloneInfoId(sp.id),
+            onMouseLeave: () => { if (!cloneInfoPinned) setCloneInfoId(null); },
+            onClick: () => { const willPin = !(cloneInfoId === sp.id && cloneInfoPinned); setCloneInfoPinned(willPin); setCloneInfoId(willPin ? sp.id : null); },
+          }, "?"),
+          active ? h("div", {
+            style: {
+              position: "absolute", bottom: "calc(100% + 6px)", left: "0", right: "auto", zIndex: 70,
+              background: "var(--dsw-specific-input-major,#ffffff)",
+              border: "1px solid var(--dsw-alias-border-l1,#333a45)", borderRadius: "8px",
+              padding: "10px 12px", boxShadow: "0 8px 24px rgba(0,0,0,.35)",
+              fontSize: "12px", lineHeight: "1.7", color: "var(--dsw-alias-label-secondary,#9aa3ad)",
+              minWidth: "340px", maxWidth: "460px", textAlign: "left",
+            },
+          },
+            h("div", { style: { fontSize: "12px", fontWeight: 700, color: "var(--dsw-alias-label-primary,#e6e9ef)", marginBottom: "3px" } }, "默认沟通指令（" + (sp.name ?? "样本") + "）"),
+            h("div", { style: { marginBottom: "8px" } }, instruct),
+            h("div", { style: { fontSize: "12px", fontWeight: 700, color: "var(--dsw-alias-label-primary,#e6e9ef)", marginBottom: "3px" } }, "试听文本"),
+            h("div", { style: {} }, (sp.previewText && sp.previewText.trim() !== "") ? sp.previewText : CLONE_PREVIEW_TEXT),
+          ) : null,
+        );
+      };
 
       if (config === null) {
         return h("div", { style: { padding: "16px", fontSize: "13px", color: "var(--dsw-alias-label-secondary,#9aa3ad)" } }, "语音配置加载中…");
@@ -901,14 +977,81 @@ window.__ModuleLoader__.load({
       const eng = config.engines;
       const cloneSamples = Array.isArray(eng.voiceclone.samples) ? eng.voiceclone.samples : [];
       const showRules = rulesPinned || rulesHover;
+      // [本地改造 2026-08-22] 语音设计单选模型：官方示例(asmr/docu/elder) / 自定义(custom) / 交给 AI(ai)
+      const VD_KEYS = ["asmr", "docu", "elder"];
+      const vdMode = (eng.voicedesign?.mode && ["asmr", "docu", "elder", "custom", "ai"].includes(eng.voicedesign.mode))
+        ? eng.voicedesign.mode
+        : (() => {
+            const ctx = eng.voicedesign?.context ?? "";
+            const i = VOICE_DESIGN_EXAMPLES.findIndex((ex) => ex.instruct === ctx);
+            return i >= 0 ? VD_KEYS[i] : (ctx.trim() !== "" ? "custom" : "ai");
+          })();
+      const pickVdMode = (m) => {
+        // [2026-08-22] 单选切换：示例=写死指令+关 AI 情绪；custom=保留文本+关 AI 情绪；ai=开 AI 情绪
+        if (m === "ai") setEngine("voicedesign", { mode: "ai", emotion: true }, true);
+        else if (VD_KEYS.includes(m)) {
+          const idx = VD_KEYS.indexOf(m);
+          setEngine("voicedesign", { mode: m, context: VOICE_DESIGN_EXAMPLES[idx].instruct, emotion: false }, true);
+        } else {
+          setEngine("voicedesign", { mode: "custom", emotion: false }, true);
+        }
+      };
+      // [2026-08-22] 年龄感 6 档（婴儿感~老年感），锚点实时可改，禁止自由文本
+      const AI_AGE_LABELS = { infant: "婴儿感", child: "幼儿感", teen: "少年感", young: "青年感", middle: "中年感", old: "老年感" };
+      const normalizeAiAge = (v) => {
+        if (!v) return "young";
+        if (AI_AGE_LABELS[v] !== undefined) return v;
+        const s = String(v);
+        if (/婴/.test(s)) return "infant";
+        if (/幼|小|岁\s*[0-6]|[0-6]\s*岁/.test(s)) return "child";
+        if (/老/.test(s)) return "old";
+        if (/中/.test(s)) return "middle";
+        if (/少|[1][0-9]\s*岁|岁\s*[7-9]/.test(s)) return "teen";
+        return "young";
+      };
+      // [2026-08-22] AI 自动模式的稳定锚点行：checkbox + 值控件。
+      // optionsOrPlaceholder: null=无具体值可选(如音色质感)；数组=[v,l][] 渲染 select；字符串=自由文本输入(placeholder)
+      const vdLockRow = (label, keyName, value, onValue, optionsOrPlaceholder) => h("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", fontSize: "12px", color: "var(--dsw-alias-label-secondary,#9aa3ad)" } },
+        h("label", { style: { display: "inline-flex", alignItems: "center", gap: "5px", cursor: "pointer" } },
+          h("input", { type: "checkbox", checked: eng.voicedesign?.[keyName] === true, onChange: (e) => setEngine("voicedesign", { [keyName]: e.target.checked }, true), style: { accentColor: "var(--vk-accent,#4b6fff)", cursor: "pointer", width: "13px", height: "13px" } }),
+          label),
+        Array.isArray(optionsOrPlaceholder) && eng.voicedesign?.[keyName] === true ? h("select", {
+          value: value,
+          onChange: (e) => onValue(e.target.value),
+          // [2026-08-22] 修复: 之前 onMouseDown preventDefault 会禁掉原生下拉弹出, 导致固定性别选不了
+          style: { ...vInput, width: "auto", padding: "3px 8px", fontSize: "12px" },
+        }, optionsOrPlaceholder.map(([v, l]) => h("option", { key: v, value: v }, l))) : null,
+        typeof optionsOrPlaceholder === "string" && eng.voicedesign?.[keyName] === true ? h("input", {
+          type: "text", value: value, placeholder: optionsOrPlaceholder,
+          onChange: (e) => onValue(e.target.value),
+          style: { ...vInput, width: "120px", padding: "3px 8px", fontSize: "12px" },
+        }) : null,
+        optionsOrPlaceholder === null ? h("span", { style: { fontSize: "11px", opacity: .8 } }, "（保持同一质感）") : null,
+      );
       // [本地改造 2026-08-21] 已移除 VoiceClone/VoiceDesign 勾选：分区始终显示
       const designOn = false;
       const cloneOn = false;
 
       return h("div", { style: { display: "flex", flexDirection: "column", gap: "14px", padding: "16px", width: "100%", boxSizing: "border-box" } },
-        // 分区标题（语音图标已移到各服务商卡片前）
-        h("div", { style: { display: "flex", alignItems: "center", gap: "8px", fontSize: "15px", fontWeight: 700, color: "var(--dsw-alias-label-primary,#e6e9ef)" } },
-          "语音服务"),
+        // 分区标题（语音图标已移到各服务商卡片前）+ 仓库链接（内联，不换行）
+        h("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", fontSize: "15px", fontWeight: 700, color: "var(--dsw-alias-label-primary,#e6e9ef)" } },
+          "语音服务",
+          h("span", { style: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", fontWeight: 400, color: "var(--dsw-alias-label-secondary,#9aa3b2)" } },
+            h("a", {
+              href: "https://github.com/oadank/dsh-input-tools",
+              target: "_blank", rel: "noopener",
+              title: "语音插件源码仓库（dsh-input-tools）",
+              style: { color: "var(--dsw-alias-link,#5b9cff)", textDecoration: "none" },
+            }, "语音插件仓库 ↗"),
+            h("span", { style: { color: "var(--dsw-alias-label-tertiary,#6b7384)" } }, "·"),
+            h("a", {
+              href: "https://github.com/oadank/deepseek-harness",
+              target: "_blank", rel: "noopener",
+              title: "整合版：插件已内置，一键安装，推荐大多数用户",
+              style: { color: "var(--dsw-alias-link,#5b9cff)", textDecoration: "none" },
+            }, "整合版（推荐）↗"),
+          ),
+        ),
         // [2026-08-21] 试听失败错误提示；[2026-08-22] fixed 顶部弹窗 Toast + 限高滚动（错误堆栈超长不撑爆）
         previewErr !== null ? h("div", {
           style: {
@@ -1036,6 +1179,10 @@ window.__ModuleLoader__.load({
             // [本地改造 2026-08-21] 修复：defaultEngine 之前只改本地 state 不持久化，刷新回 auto；
             // 现在与其它字段一致：防抖 POST 立即保存
             const next = { ...config, defaultEngine: e.target.value };
+            // [本地改造 2026-08-22] 选「语音设计」时若还没选过模式，默认「纪录片旁白」；用户自己切过就保留原设计
+            if (e.target.value === "voicedesign" && !(config.engines?.voicedesign?.mode)) {
+              next.engines = { ...(config.engines ?? {}), voicedesign: { ...(config.engines?.voicedesign ?? {}), mode: "docu", context: VOICE_DESIGN_EXAMPLES[1].instruct, emotion: false } };
+            }
             setConfig(next);
             if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
             saveTimerRef.current = window.setTimeout(() => {
@@ -1046,9 +1193,11 @@ window.__ModuleLoader__.load({
         },
           ["auto", ...ENGINES_ORDER].map((k) => h("option", { key: k, value: k },
             k === "auto" ? "auto（按规则自动选择，未启用任何引擎时用微软 edge 免费兜底）"
-              : k === "voiceclone"
-                ? "小米克隆（VoiceClone）" + (cloneSamples.length > 0 ? "：默认用「" + cloneSamples[0].name + "」" : "（未添加样本）")
-                : ENGINE_LABELS[k])))),
+              : k === "voicedesign"
+                ? "小米语音设计（VoiceDesign）：默认用「纪录片旁白」指令"
+                : k === "voiceclone"
+                  ? "小米克隆（VoiceClone）" + (cloneSamples.length > 0 ? "：默认用「" + cloneSamples[0].name + "」" : "（未添加样本）")
+                  : ENGINE_LABELS[k])))),
         // 语音三原则：问号按钮（hover 显示，点击固定/收起）
         h("div", { style: { position: "relative", display: "inline-flex", alignItems: "center", gap: "6px" } },
           h("button", {
@@ -1068,7 +1217,7 @@ window.__ModuleLoader__.load({
           showRules ? h("div", {
             style: {
               position: "absolute", top: "calc(100% + 6px)", left: "0", zIndex: 30,
-              background: "var(--dsw-specific-input-fill,#1e2128)",
+              background: "var(--dsw-specific-input-major,#ffffff)",
               border: "1px solid var(--dsw-alias-border-l1,#333a45)", borderRadius: "8px",
               padding: "10px 12px", boxShadow: "0 8px 24px rgba(0,0,0,.35)",
               fontSize: "12px", lineHeight: "1.8", color: "var(--dsw-alias-label-secondary,#9aa3ad)",
@@ -1118,32 +1267,76 @@ window.__ModuleLoader__.load({
                 )),
               ),
             ),
-            // 克隆模型：MiMo-V2.5-TTS-VoiceDesign（官方示例，始终显示）
+            // [2026-08-22] 语音设计：MiMo-V2.5-TTS-VoiceDesign（单选：官方示例 / 自定义 / 交给 AI，始终显示）
             h("div", { style: { display: "flex", flexDirection: "column", gap: "8px", borderTop: "1px dashed var(--dsw-alias-border-l1,#333a45)", paddingTop: "8px" } },
               h("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
-                h("span", { style: { fontSize: "12.5px", fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)" } }, "克隆模型：MiMo-V2.5-TTS-VoiceDesign"),
-                helpTip("「音色设计 VoiceDesign」由 AI 根据对话情境自动编写音色描述（无需你填写）：比如你说「用低沉的声音念这首诗」，AI 会自己写一段音色描述（年龄段+性别+质感+语速+情绪）再念。开启后 AI 还会自觉用语音表达情绪：任务成功时兴奋道喜、你生气时委屈道歉、你难过时温柔安慰等。下方示例是官方效果，点播放即可试听。", designTipPinned, setDesignTipPinned, designTipHover, setDesignTipHover, "center", "top"),
+                h("span", { style: { fontSize: "12.5px", fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)" } }, "语音设计：MiMo-V2.5-TTS-VoiceDesign"),
+                helpTip("「音色设计 VoiceDesign」用一段文字描述你想要的声音（性别/年龄/质感/语速/情绪），AI 照着念。单选：选官方示例（ASMR / 纪录片旁白 / 年迈老先生），或自定义填写，或「交给 AI 自动发挥」（AI 按对话情境写音色描述，可勾选固定性别/音色/年龄保持声音稳定——尚未充分测试）。选为默认语音引擎后默认用「纪录片旁白」；切换过就保留你的选择。", designTipPinned, setDesignTipPinned, designTipHover, setDesignTipHover, "center", "top"),
               ),
-              h("div", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary,#9aa3ad)" } }, "官方示例"),
-              VOICE_DESIGN_EXAMPLES.map((ex, i) => h("div", { key: ex.title, style: { border: "1px solid var(--dsw-alias-border-l1,#333a45)", borderRadius: "8px", padding: "8px 10px", display: "flex", flexDirection: "column", gap: "6px" } },
-                h("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
-                  h("span", { style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)", flex: "none" } }, ex.title),
-                  helpTip(
-                    h("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
-                      h("div", null, h("span", { style: { fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)" } }, "Instruct："), ex.instruct),
-                      h("div", null, h("span", { style: { fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)" } }, "Text："), ex.text),
+              h("div", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary,#9aa3ad)" } }, "单选：当前使用的高亮（点播放可试听）"),
+              VOICE_DESIGN_EXAMPLES.map((ex, i) => {
+                const key = VD_KEYS[i];
+                const active = vdMode === key;
+                return h("div", { key: ex.title, style: { border: "1px solid " + (active ? "var(--vk-accent,#4b6fff)" : "var(--dsw-alias-border-l1,#333a45)"), borderRadius: "8px", padding: "6px 10px", display: "flex", flexDirection: "column", gap: "6px", background: active ? "rgba(75,111,255,.08)" : "transparent" } },
+                  h("label", { style: { display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" } },
+                    h("input", { type: "radio", name: "vd-mode", checked: active, onChange: () => pickVdMode(key), style: { accentColor: "var(--vk-accent,#4b6fff)", cursor: "pointer", flex: "none", width: "14px", height: "14px" } }),
+                    h("span", { style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)", flex: "none" } }, ex.title),
+                    active ? h("span", { style: { fontSize: "11px", color: "var(--vk-accent,#4b6fff)", flex: "none" } }, "使用中") : null,
+                    h("span", { style: { flex: 1 } }),
+                    helpTip(
+                      h("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+                        h("div", null, h("span", { style: { fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)" } }, "Instruct："), ex.instruct),
+                        h("div", null, h("span", { style: { fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)" } }, "Text："), ex.text),
+                      ),
+                      vdExamplePins[i], (v) => { const n = [...vdExamplePins]; n[i] = v; setVdExamplePins(n); },
+                      vdExampleHovers[i], (v) => { const n = [...vdExampleHovers]; n[i] = v; setVdExampleHovers(n); },
+                      "left", "top",
                     ),
-                    vdExamplePins[i], (v) => { const n = [...vdExamplePins]; n[i] = v; setVdExamplePins(n); },
-                    vdExampleHovers[i], (v) => { const n = [...vdExampleHovers]; n[i] = v; setVdExampleHovers(n); },
-                    "left", "top",
                   ),
+                  h("audio", {
+                    controls: true, preload: "none",
+                    src: vdSamples[i] !== undefined ? "data:" + vdSamples[i].mediaType + ";base64," + vdSamples[i].data : undefined,
+                    style: { width: "100%", height: "32px" },
+                  }),
+                );
+              }),
+              // 自定义音色描述（单选）
+              h("div", { style: { border: "1px solid " + (vdMode === "custom" ? "var(--vk-accent,#4b6fff)" : "var(--dsw-alias-border-l1,#333a45)"), borderRadius: "8px", padding: "6px 10px", display: "flex", flexDirection: "column", gap: "6px", background: vdMode === "custom" ? "rgba(75,111,255,.08)" : "transparent" } },
+                h("label", { style: { display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" } },
+                  h("input", { type: "radio", name: "vd-mode", checked: vdMode === "custom", onChange: () => pickVdMode("custom"), style: { accentColor: "var(--vk-accent,#4b6fff)", cursor: "pointer", flex: "none", width: "14px", height: "14px" } }),
+                  h("span", { style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)" } }, "自定义音色描述"),
+                  vdMode === "custom" ? h("span", { style: { fontSize: "11px", color: "var(--vk-accent,#4b6fff)" } }, "使用中") : null,
                 ),
-                h("audio", {
-                  controls: true, preload: "none",
-                  src: vdSamples[i] !== undefined ? "data:" + vdSamples[i].mediaType + ";base64," + vdSamples[i].data : undefined,
-                  style: { width: "100%", height: "32px" },
-                }),
-              )),
+                vdMode === "custom" ? h("div", { style: { display: "flex", flexDirection: "column", gap: "6px" } },
+                  h("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                    previewBtn("vd-custom", "试听当前指令", () => previewVoice("voicedesign", undefined, eng.voicedesign?.context ?? "", undefined, "vd-custom", { text: "这是一段使用你设计的音色朗读的语音，用来检查当前音色描述的效果。" })),
+                    h("span", { style: { fontSize: "11.5px", color: "var(--dsw-alias-label-secondary,#9aa3ad)" } }, "写好后点试听；切换到其它选项会保留这段文本"),
+                  ),
+                  h("textarea", {
+                    value: eng.voicedesign?.context ?? "",
+                    onChange: (e) => setEngine("voicedesign", { context: e.target.value }, true),
+                    placeholder: "如：一位温柔的年轻女性，说标准普通话，语速缓慢，声音甜美，像在耳边轻声细语…",
+                    style: { ...vInput, minHeight: "64px", resize: "vertical", lineHeight: "1.6" },
+                  }),
+                ) : null,
+              ),
+              // 交给 AI 自动发挥（单选）+ 稳定锚点锁定
+              h("div", { style: { border: "1px solid " + (vdMode === "ai" ? "var(--vk-accent,#4b6fff)" : "var(--dsw-alias-border-l1,#333a45)"), borderRadius: "8px", padding: "6px 10px", display: "flex", flexDirection: "column", gap: "6px", background: vdMode === "ai" ? "rgba(75,111,255,.08)" : "transparent" } },
+                h("label", { style: { display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" } },
+                  h("input", { type: "radio", name: "vd-mode", checked: vdMode === "ai", onChange: () => pickVdMode("ai"), style: { accentColor: "var(--vk-accent,#4b6fff)", cursor: "pointer", flex: "none", width: "14px", height: "14px" } }),
+                  h("span", { style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)" } }, "交给 AI 自动发挥"),
+                  vdMode === "ai" ? h("span", { style: { fontSize: "11px", color: "var(--vk-accent,#4b6fff)" } }, "使用中") : null,
+                ),
+                vdMode === "ai" ? h("div", { style: { display: "flex", flexDirection: "column", gap: "6px", fontSize: "12px", color: "var(--dsw-alias-label-secondary,#9aa3ad)", lineHeight: "1.6" } },
+                  h("div", null, "音色描述由 AI 根据对话情境自动编写（任务成功兴奋道喜 / 生气委屈道歉 / 难过温柔安慰）。下面的锁定项让 AI 每次都是同一个人：性别/年龄选好值，音色质感保持同一质感，只允许情绪/语速/语气波动（尚未充分测试）："),
+                  h("div", { style: { display: "flex", flexDirection: "column", gap: "4px" } },
+                    vdLockRow("固定性别", "lockGender", eng.voicedesign?.aiGender ?? "female", (v) => setEngine("voicedesign", { aiGender: v }, true), [["female", "女"], ["male", "男"]]),
+                    vdLockRow("固定音色质感", "lockTimbre", null, null, null),
+                    vdLockRow("固定年龄感", "lockAge", normalizeAiAge(eng.voicedesign?.aiAge), (v) => setEngine("voicedesign", { aiAge: v }, true),
+                      [["infant", "婴儿感"], ["child", "幼儿感"], ["teen", "少年感"], ["young", "青年感"], ["middle", "中年感"], ["old", "老年感"]]),
+                  ),
+                ) : null,
+              ),
             ),
             // 克隆模型：MiMo-V2.5-TTS-VoiceClone（样本管理，始终显示）
             h("div", { style: { display: "flex", flexDirection: "column", gap: "6px", borderTop: "1px dashed var(--dsw-alias-border-l1,#333a45)", paddingTop: "8px" } },
@@ -1152,33 +1345,50 @@ window.__ModuleLoader__.load({
                 helpTip("克隆音色与预置音色（冰糖等）互斥：在「默认语音引擎」里选择「小米克隆（VoiceClone）」后，默认回复一律使用下方克隆声音；开启 VoiceDesign 时，AI 会在克隆底嗓上叠加情感指令（如「用委屈撒娇的语气」），克隆声同样带情感。", cloneListTipPinned, setCloneListTipPinned, cloneListTipHover, setCloneListTipHover, "center", "top"),
               ),
               cloneSamples.length > 0 ? h("div", { style: { display: "flex", flexDirection: "column", gap: "6px" } },
-                h("div", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary,#9aa3ad)" } }, "已保存的克隆音色："),
-                cloneSamples.map((sp) => h("div", { key: sp.id, style: { display: "flex", alignItems: "center", gap: "8px", border: "1px solid var(--dsw-alias-border-l1,#333a45)", borderRadius: "8px", padding: "6px 10px", fontSize: "12.5px" } },
-                    h("span", { style: { fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)", flex: "none" } }, sp.name ?? "样本"),
-                    h("span", { style: { color: "var(--dsw-alias-label-secondary,#9aa3ad)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 } }, sp.path ?? ""),
-                    previewBtn("clone:" + sp.id, "试听克隆合成效果（统一文本）", () => previewVoice("voiceclone", undefined, undefined, sp.path, "clone:" + sp.id, { text: CLONE_PREVIEW_TEXT })),
-                    previewBtn("clone-src:" + sp.id, "试听原始音频（对比克隆还原度）", () => previewSourceVoice(sp.path, "clone-src:" + sp.id), "▶"),
-                    h("button", {
-                      type: "button", "aria-label": "删除", title: "删除此克隆音色",
-                      style: { border: "none", borderRadius: "6px", width: "28px", height: "28px", flex: "none", background: "rgba(229,72,77,.15)", color: "#e5484d", cursor: "pointer", fontSize: "14px" },
-                      onMouseDown: (e) => e.preventDefault(),
-                      onClick: () => setEngine("voiceclone", { samples: cloneSamples.filter((x) => x.id !== sp.id) }, true),
-                    }, "✕"),
-                  )),
+                h("div", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary,#9aa3ad)" } }, "已保存的克隆音色（默认语音引擎选「小米克隆」后用第一个音色）："),
+                cloneSamples.map((sp) => {
+                  // [本地改造 2026-08-22] 自带小团团样本：禁止删除；两行展示（第一行 ?+名称+完整路径+试听原音，第二行 合成试听录音+删除）
+                  const isDefault = sp.id === BUNDLED_CLONE_ID;
+                  return h("div", { key: sp.id, style: { border: "1px solid var(--dsw-alias-border-l1,#333a45)", borderRadius: "8px", padding: "6px 10px", display: "flex", flexDirection: "column", gap: "6px", fontSize: "12.5px" } },
+                    h("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                      cloneInfoTip(sp),
+                      h("span", { style: { fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)", flex: "none", whiteSpace: "nowrap" } }, sp.name ?? "样本"),
+                      h("span", { style: { color: "var(--dsw-alias-label-secondary,#9aa3ad)", fontSize: "11px", flex: 1, minWidth: 0, wordBreak: "break-all", lineHeight: "1.4" } }, sp.path ?? ""),
+                      previewBtn("clone-src:" + sp.id, "试听原音（样本原始音频，对比还原度）", () => previewSourceVoice(sp.path, "clone-src:" + sp.id), "▶"),
+                    ),
+                    h("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                      previewBtn("clone-baked:" + sp.id, "播放合成音（克隆效果试听）", () => playBakedPreview(sp, "clone-baked:" + sp.id)),
+                      h("span", { style: { fontSize: "11.5px", color: "var(--dsw-alias-label-secondary,#9aa3ad)", flex: 1 } },
+                        "合成效果试听" + (isDefault ? "（预生成录音，免联网）" : "（按该音色指令/文本合成）")),
+                      isDefault ? null : h("button", {
+                        type: "button", "aria-label": "删除", title: "删除此克隆音色",
+                        style: { border: "none", borderRadius: "6px", width: "28px", height: "28px", flex: "none", background: "rgba(229,72,77,.15)", color: "#e5484d", cursor: "pointer", fontSize: "14px" },
+                        onMouseDown: (e) => e.preventDefault(),
+                        onClick: () => setEngine("voiceclone", { samples: cloneSamples.filter((x) => x.id !== sp.id) }, true),
+                      }, "✕"),
+                    ),
+                  );
+                }),
               ) : h("div", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary,#9aa3ad)", lineHeight: 1.7 } },
                 "无（尚未添加克隆音色）。",
               ),
               // [本地改造 2026-08-21] 添加克隆音色：选音频 → 命名 → 上传
+              // [本地改造 2026-08-22] 与自带小团团样本对齐：需要提供 3 样 —— 指令（默认沟通语气）+ 文本（试听内容）+ 样本音频
               h("div", { style: { display: "flex", flexDirection: "column", gap: "6px", borderTop: "1px dashed var(--dsw-alias-border-l1,#333a45)", paddingTop: "8px" } },
                 h("div", { style: { fontSize: "12.5px", fontWeight: 600, color: "var(--dsw-alias-label-primary,#e6e9ef)" } }, "添加克隆音色"),
-                h("div", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary,#9aa3ad)" } }, "支持 mp3 / wav，Base64 后 ≤10MB（官方限制）；参考语音建议 15-60 秒、单人纯人声无背景音乐，越长克隆越准。"),
-                h("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" } },
+                h("div", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary,#9aa3ad)" } }, "需要提供 3 样：①沟通指令（这个声音默认用什么语气跟客户沟通）②试听文本（点播放念哪句）③样本音频（克隆的原始声音）。音频支持 mp3 / wav，Base64 后 ≤10MB（官方限制）；参考语音建议 15-60 秒、单人纯人声无背景音乐，越长克隆越准。"),
+                h("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+                  vField("沟通指令（默认语气）", h("textarea", { value: cloneContext, onChange: (e) => setCloneContext(e.target.value), placeholder: "如：一个魔性的少女萝莉音，说话自带沙雕搞怪气质，爱撒娇爱耍宝…", style: { ...vInput, minHeight: "56px", resize: "vertical", lineHeight: "1.5" } })),
+                  vField("试听文本", h("textarea", { value: clonePreviewText, onChange: (e) => setClonePreviewText(e.target.value), placeholder: "如：喂喂喂！你怎么才来呀？我都等你老半天啦！……", style: { ...vInput, minHeight: "56px", resize: "vertical", lineHeight: "1.5" } })),
                   vField("名称", h("input", { value: cloneName, onChange: (e) => setCloneName(e.target.value), placeholder: "如：我的声音（留空用文件名）", style: { ...vInput, width: "100%" } })),
-                  h("button", {
-                    type: "button", onClick: () => cloneFileRef.current?.click(), disabled: addingClone,
-                    style: { background: "var(--vk-accent,#4b6fff)", color: "#fff", border: "none", borderRadius: "999px", padding: "7px 16px", fontSize: "12.5px", fontWeight: 600, cursor: "pointer", flex: "none" },
-                  }, addingClone ? "添加中…" : "选择音频文件添加"),
-                  h("input", { ref: cloneFileRef, type: "file", accept: ".mp3,.wav,audio/mpeg,audio/wav", style: { display: "none" }, onChange: (e) => { const f = e.target.files && e.target.files[0]; if (f !== undefined && f !== null) void addCloneSample(f); } }),
+                  h("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" } },
+                    h("button", {
+                      type: "button", onClick: () => cloneFileRef.current?.click(), disabled: addingClone,
+                      style: { background: "var(--vk-accent,#4b6fff)", color: "#fff", border: "none", borderRadius: "999px", padding: "7px 16px", fontSize: "12.5px", fontWeight: 600, cursor: "pointer", flex: "none" },
+                    }, addingClone ? "添加中…" : "选择音频文件添加"),
+                    h("span", { style: { fontSize: "11.5px", color: "var(--dsw-alias-label-secondary,#9aa3ad)" } }, "选完音频即自动上传添加"),
+                    h("input", { ref: cloneFileRef, type: "file", accept: ".mp3,.wav,audio/mpeg,audio/wav", style: { display: "none" }, onChange: (e) => { const f = e.target.files && e.target.files[0]; if (f !== undefined && f !== null) void addCloneSample(f); } }),
+                  ),
                 ),
                 cloneAddMsg !== null ? h("div", { style: { fontSize: "12px", color: cloneAddMsg.ok ? "#73c991" : "#f14c4c" } }, cloneAddMsg.text) : null,
               ),

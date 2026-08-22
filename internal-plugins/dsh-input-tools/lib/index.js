@@ -20,11 +20,11 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, unlink, writeFile, copyFile } from 'node:fs/promises'
+import { mkdir, open, readFile, unlink, writeFile, copyFile, stat } from 'node:fs/promises'
 import { constants, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { edgeTts } from './edge-tts.js'
@@ -48,6 +48,26 @@ const BUNDLED_CLONE_SAMPLE = {
 }
 const VOICE_DESIGN_SAMPLE_KEYS = ['asmr', 'docu', 'elder']
 
+// [2026-08-22] AI 自动模式的年龄感 6 档（用户实时可改，禁止自由文本）
+const AI_AGE_LABELS = { infant: '婴儿感', child: '幼儿感', teen: '少年感', young: '青年感', middle: '中年感', old: '老年感' }
+
+// [2026-08-22] 年龄×性别 → 无歧义身份短语（XDN 实测: "老年感+女孩"分维度拼接自相矛盾，
+// "女孩"是中心词→年龄被降级→萝莉化；且"忽略性别/年龄"注把"沙哑/苍老"等最强质感词删了）。
+// 改为"老年女性/小女孩/少女"这类中心词明确的合并短语，年龄不会再被降级。
+function ageGenderIdentity(ageKey, genderKey) {
+  const male = genderKey === 'male'
+  const female = genderKey === 'female'
+  switch (ageKey) {
+    case 'infant': return male ? '男婴' : female ? '女婴' : '婴儿'
+    case 'child': return male ? '小男孩' : female ? '小女孩' : '小孩'
+    case 'teen': return male ? '少年' : female ? '少女' : '少年'
+    case 'young': return male ? '青年男性' : female ? '青年女性' : '青年人'
+    case 'middle': return male ? '中年男性' : female ? '中年女性' : '中年人'
+    case 'old': return male ? '老年男性' : female ? '老年女性' : '老年人'
+    default: return male ? '男性' : female ? '女性' : ''
+  }
+}
+
 let bundledInitDone = false
 /** 首次加载把自带素材落地到 DSH_HOME：克隆样本 mp3 拷贝 + 首次安装自动注册小团团。 */
 async function ensureBundledAssets(config, parsed) {
@@ -60,6 +80,8 @@ async function ensureBundledAssets(config, parsed) {
     try {
       await mkdir(cloneDir, { recursive: true })
       await copyFile(join(ASSETS_DIR, 'voiceclone-samples', BUNDLED_CLONE_ID + '.mp3'), dstClone)
+      // [2026-08-22] 预生成的合成试听录音（静态文件，播放免联网；与 VoiceDesign 官方示例同类）
+      await copyFile(join(ASSETS_DIR, 'voiceclone-samples', BUNDLED_CLONE_ID + '-preview.mp3'), join(cloneDir, BUNDLED_CLONE_ID + '-preview.mp3'))
     } catch { /* 包内素材缺失或拷贝失败：跳过（不阻塞启动） */ }
     // 仅"首次安装"（配置里还没有 voiceclone 键）时注册自带样本；用户删光的 [] 不强制
     const parsedHasClone = parsed !== null && typeof parsed === 'object' && parsed.engines?.voiceclone !== undefined
@@ -90,7 +112,14 @@ function defaultVoiceConfig() {
         singing: false,
         context: '',
       },
-      voicedesign: { enabled: false, context: '', emotion: true }, // emotion=AI 情感语音开关（默认开）
+      voicedesign: {
+        enabled: false,
+        mode: 'docu', // [2026-08-22] 单选: asmr|docu|elder|custom|ai（官方示例/自定义/交给 AI 自动发挥）
+        context: '',
+        emotion: false, // AI 情感语音（mode=ai 时自动开；固定示例/自定义模式关闭，保证音色一致）
+        lockGender: true, lockTimbre: true, lockAge: true, // [2026-08-22] AI 自动模式下的稳定锚点锁定
+        aiGender: 'female', aiAge: 'young', // [2026-08-22] AI 自动模式固定值：性别(女/男)；年龄感 6 档 infant/child/teen/young/middle/old
+      }, // emotion=AI 情感语音开关（默认开）
       voiceclone: { enabled: false, samples: [], samplePath: '', context: '', defaultId: '' }, // [本地改造 2026-08-21] defaultId 已废弃，默认克隆由 defaultEngine=voiceclone 控制
       local: { enabled: true, url: '', cmd: '' },
       ali: {
@@ -126,13 +155,18 @@ function deepMerge(base, patch) {
 }
 
 let cachedConfig = null
+let cachedMtimeMs = -1
 async function loadVoiceConfig() {
-  if (cachedConfig !== null) return cachedConfig
+  // [2026-08-22] 实时读取：配置文件 mtime 变化（保存/外部修改）即重读，杜绝进程内旧缓存
+  let mtimeMs = -1
+  try { mtimeMs = (await stat(CONFIG_PATH)).mtimeMs } catch { /* 文件不存在 */ }
+  if (cachedConfig !== null && mtimeMs === cachedMtimeMs) return cachedConfig
   let parsed = {}
   try {
     parsed = JSON.parse(await readFile(CONFIG_PATH, 'utf8'))
   } catch { /* 首次无配置 */ }
   cachedConfig = deepMerge(defaultVoiceConfig(), parsed)
+  cachedMtimeMs = mtimeMs
   // [0.3.4] 自带素材初始化（拷贝克隆样本 + 首次安装自动注册小团团）
   await ensureBundledAssets(cachedConfig, parsed)
   // 环境变量覆盖（兼容旧配置；显式配置值优先于 env）
@@ -160,6 +194,7 @@ async function saveVoiceConfig(config) {
   cachedConfig = deepMerge(defaultVoiceConfig(), config)
   await mkdir(join(CONFIG_PATH, '..'), { recursive: true })
   await writeFile(CONFIG_PATH, JSON.stringify(cachedConfig, null, 2), 'utf8')
+  try { cachedMtimeMs = (await stat(CONFIG_PATH)).mtimeMs } catch { /* 忽略 */ }
   return cachedConfig
 }
 
@@ -274,8 +309,9 @@ const FFMPEG_BIN = resolveFfmpegBin()
 
 /** 统一入口：provider → 引擎；auto → 配置 defaultEngine，失败沿降级链（最后兜底微软 edge）。
  *  voiceDesc 为动态音色描述（仅 voicedesign 用）：AI 对话中生成，覆盖配置里的默认音色描述。
- *  [本地改造 2026-08-21] 克隆不再隐式优先：默认克隆由「默认语音引擎=voiceclone」控制，或显式 provider=voiceclone。 */
-async function synthesizeReplyVoice(text, provider, voiceDesc) {
+ *  [本地改造 2026-08-21] 克隆不再隐式优先：默认克隆由「默认语音引擎=voiceclone」控制，或显式 provider=voiceclone。
+ *  [2026-08-22] overrideVoice=true：固定模式(示例/自定义)下 voiceDesc 整体替换底嗓（用户明确要求换声）；默认 false=voiceDesc 作为情绪/风格叠加在底嗓上。 */
+async function synthesizeReplyVoice(text, provider, voiceDesc, overrideVoice) {
   const cfg = await loadVoiceConfig()
   const speak = stripMarkdown(text)
   const engine = provider ?? cfg.defaultEngine ?? 'auto'
@@ -288,7 +324,7 @@ async function synthesizeReplyVoice(text, provider, voiceDesc) {
   // 才走克隆（synthesizeEngine 的 voiceclone 分支），其余情况走正常引擎链。
   for (const candidate of fallbackChain) {
     try {
-      const audio = await synthesizeEngine(candidate, speak, cfg, voiceDesc)
+      const audio = await synthesizeEngine(candidate, speak, cfg, voiceDesc, overrideVoice)
       if (audio !== null) return audio
     } catch { /* 尝试下一个 */ }
   }
@@ -300,7 +336,7 @@ async function synthesizeReplyVoice(text, provider, voiceDesc) {
   return null
 }
 
-async function synthesizeEngine(engine, text, cfg, voiceDesc) {
+async function synthesizeEngine(engine, text, cfg, voiceDesc, overrideVoice) {
   const e = cfg.engines[engine]
   // [本地改造 2026-08-21] 配置存在即启用：设置页已去复选框，enabled 不再拦截；
   // 各引擎自身检查必需参数（xiaomi/ali 查 key、local 查 cmd/url、voicedesign 查 key+desc、voiceclone 查 key+样本）。
@@ -308,7 +344,7 @@ async function synthesizeEngine(engine, text, cfg, voiceDesc) {
   switch (engine) {
     case 'edge': return synthesizeEdgeVoice(text, e)
     case 'xiaomi': return synthesizeXiaomiVoice(text, e)
-    case 'voicedesign': return synthesizeXiaomiVoiceDesign(text, e, cfg, voiceDesc)
+    case 'voicedesign': return synthesizeXiaomiVoiceDesign(text, e, cfg, voiceDesc, overrideVoice)
     case 'voiceclone': return synthesizeXiaomiVoiceClone(text, e, cfg, voiceDesc)
     case 'local': return synthesizeLocalVoice(text, e)
     case 'ali': return synthesizeAliVoice(text, e)
@@ -355,10 +391,52 @@ async function synthesizeXiaomiVoice(text, cfg) {
 }
 
 // ── xiaomi 音色设计（mimo-v2.5-tts-voicedesign：user=音色描述，无 voice）──
-async function synthesizeXiaomiVoiceDesign(text, cfg, globalCfg, voiceDesc) {
+// [2026-08-22] overrideVoice=true：固定模式(示例/自定义)下 voiceDesc 整体替换底嗓（用户明确要求换声）；
+// 默认 false：voiceDesc 作为"情绪/风格"叠加在用户设置的底嗓(context)后面——与工具描述一致，不再"非空即覆盖"。
+async function synthesizeXiaomiVoiceDesign(text, cfg, globalCfg, voiceDesc, overrideVoice) {
   const apiKey = globalCfg.engines.xiaomi.apiKey
   // 优先用 AI 动态生成的音色描述（voiceDesc），否则用配置里的默认音色描述
-  const desc = (voiceDesc ?? '').trim() !== '' ? voiceDesc.trim() : (cfg?.context?.trim() ?? '')
+  // [2026-08-22] 模式感知兜底：mode=ai 时绝不能回退到用户残留的固定描述(context)——
+  // 而是按 aiGender/aiAge 生成中性基座（用户没让 AI 写时也稳定），避免"切到 AI 模式却用旧 ASMR 指令"。
+  const vdMode = cfg?.mode
+  let desc = (voiceDesc ?? '').trim()
+  if (vdMode === 'ai') {
+    // [2026-08-22] AI 模式：身份一律以用户实时配置的锚点为准（锁定项）。
+    // 修复(XDN 实测): ①"老年感+女孩"分维度拼接→身份自相矛盾(模型选"女孩"→萝莉化),
+    //    改 ageGenderIdentity 合并成"老年女性/小女孩/少女"等无歧义短语;
+    // ②"性别/年龄表述忽略"注把 AI 写的"沙哑/苍老/低沉"等最强质感词删了,
+    //    改为只锁定性别/年龄, 允许情绪与音色质感词保留并强化。
+    const gKey = cfg?.aiGender === 'male' ? 'male' : cfg?.aiGender === 'female' ? 'female' : ''
+    const aKey = AI_AGE_LABELS[cfg?.aiAge] !== undefined ? cfg.aiAge : ''
+    const identity = ageGenderIdentity(aKey, gKey)
+    const lockG = cfg?.lockGender === true
+    const lockA = cfg?.lockAge === true
+    const lockT = cfg?.lockTimbre === true
+    const gLabel = gKey === 'male' ? '男' : gKey === 'female' ? '女' : ''
+    const aLabel = AI_AGE_LABELS[aKey] ?? ''
+    const anchorText = [
+      lockG ? '性别固定为' + (gLabel !== '' ? gLabel : '每次一致') : '',
+      lockA ? '年龄感固定为' + (aLabel !== '' ? aLabel : '每次一致') : '',
+      lockT ? '音色质感保持稳定' : '',
+    ].filter(Boolean).join('、')
+    if (identity !== '' || anchorText !== '') {
+      desc = (identity !== '' ? '一位' + identity + '的声音（身份硬性要求：' + (anchorText !== '' ? anchorText : '按上述身份')
+        + '；若与其他描述冲突，一律以本身份为准）。' : '')
+        + (desc !== '' ? '语气/情绪要求：' + desc + '（性别/年龄以身份为准；音色质感与语气情绪按本描述执行——如"沙哑、苍老、低沉、气声"等质感词应保留并强化）。'
+          : '语气情绪要饱满生动：像真人一样带喜怒哀乐、笑音、撒娇或急切等起伏，禁止平淡。')
+    } else if (desc === '') {
+      desc = '语气情绪要饱满生动：像真人一样带喜怒哀乐、笑音、撒娇或急切等起伏，禁止平淡。'
+    }
+  } else {
+    // 固定模式（示例/自定义）：底嗓一律用用户设置的 context，voiceDesc 作为情绪/风格叠加在后面（描述与实现一致）；
+    // 仅 overrideVoice=true（用户明确要求换一种完全不同的声音）时整体替换。
+    const base = (cfg?.context?.trim() ?? '')
+    if (overrideVoice === true && desc !== '') {
+      desc = desc // 整体替换底嗓
+    } else {
+      desc = base + (desc !== '' ? '；' + desc : '')
+    }
+  }
   if (apiKey === '' || desc === '') return null
   const baseUrl = globalCfg.engines.xiaomi.baseUrl ?? 'https://api.xiaomimimo.com/v1'
   const messages = [
@@ -837,6 +915,7 @@ async function apply(ctx) {
               const text = typeof body?.text === 'string' && body.text.trim() !== '' ? body.text.trim() : '你好，这是一段语音试听。'
               const context = typeof body?.context === 'string' ? body.context : undefined
               const samplePath = typeof body?.samplePath === 'string' ? body.samplePath : undefined
+              const cloneContext = typeof body?.cloneContext === 'string' ? body.cloneContext : undefined // [2026-08-22] 克隆试听时作为样本自带指令
               const cfg = await loadVoiceConfig()
               // 临时覆盖音色/情绪/样本试听（不改持久化配置）
               if (voice !== undefined && cfg.engines[engine] !== undefined && engine !== 'voicedesign' && engine !== 'voiceclone') {
@@ -846,9 +925,11 @@ async function apply(ctx) {
                 if (engine === 'voicedesign') cfg.engines.voicedesign.context = context
                 else if (engine === 'xiaomi') cfg.engines.xiaomi.context = context
               }
-              // voiceclone 试听：用指定样本临时替换 samples（避免 samples[0] 优先导致试听错样本）
-              if (samplePath !== undefined && samplePath !== '' && engine === 'voiceclone') {
-                cfg.engines.voiceclone.samples = [{ id: '__preview__', name: '__preview__', path: samplePath }]
+              // voiceclone 试听：用指定样本临时替换 samples（避免 samples[0] 优先导致试听错样本）；
+              // [2026-08-22] cloneContext 作为样本自带指令传入，合成时能带出音色性格（如小团团沙雕可爱腔）
+              if (engine === 'voiceclone') {
+                const sp = (samplePath !== undefined && samplePath !== '') ? samplePath : (cfg.engines.voiceclone.samples[0]?.path ?? '')
+                cfg.engines.voiceclone.samples = [{ id: '__preview__', name: '__preview__', path: sp, context: cloneContext ?? '' }]
               }
               // local 试听：body.cmd / body.url 临时覆盖（用户未保存前也能试听）
               if (engine === 'local') {
@@ -919,7 +1000,11 @@ async function apply(ctx) {
               const samples = Array.isArray(cfg.engines?.voiceclone?.samples)
                 ? [...cfg.engines.voiceclone.samples]
                 : []
-              samples.push({ id, name, path: samplePath })
+              samples.push({
+                id, name, path: samplePath,
+                context: typeof body?.context === 'string' ? body.context : '',      // [2026-08-22] 该音色默认沟通指令
+                previewText: typeof body?.previewText === 'string' ? body.previewText : '', // [2026-08-22] 该音色试听文本
+              })
               const next = await saveVoiceConfig({
                 ...cfg,
                 engines: {
@@ -950,6 +1035,24 @@ async function apply(ctx) {
                 return sendJson(res, 200, { ok: true, mediaType, data: bytes.toString('base64') })
               } catch {
                 return sendJson(res, 404, { ok: false, error: '样本文件不存在' })
+              }
+            }
+            // [2026-08-22] 克隆合成试听录音（预生成静态文件，免联网）：GET ?id=<sampleId> → DSH_HOME/voiceclone-samples/<id>-preview.mp3
+            // 与 VoiceDesign 官方示例同思路：录音打进包内/落地本地，播放不再每次调官方合成
+            if (url.pathname === '/voice-config/voice-clone/preview-sample' && req.method === 'GET') {
+              const id = url.searchParams.get('id') ?? ''
+              if (!/^[0-9a-fA-F-]{36}$/.test(id)) return sendJson(res, 400, { ok: false, error: 'invalid id' })
+              const homeDir = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+              const dir = resolve(join(homeDir, 'voiceclone-samples'))
+              const target = resolve(join(dir, id + '-preview.mp3'))
+              if (!target.toLowerCase().startsWith(dir.toLowerCase() + sep)) {
+                return sendJson(res, 403, { ok: false, error: 'forbidden' })
+              }
+              try {
+                const bytes = await readFile(target)
+                return sendJson(res, 200, { ok: true, mediaType: 'audio/mpeg', data: bytes.toString('base64') })
+              } catch {
+                return sendJson(res, 404, { ok: false, error: '尚未生成试听录音' })
               }
             }
             return sendJson(res, 404, { ok: false, error: 'not found' })
@@ -1289,78 +1392,31 @@ async function apply(ctx) {
     // 2) send_voice 工具（agent 主动发语音；人设规则3 自主选择场景）
     disposers.push(ctx.tools.register(defineTool({
       name: 'send_voice',
-      description: (() => {
-        const syncCfg = loadVoiceConfigSync()
-        const voiceCfg = syncCfg.engines?.voicedesign
-        const cloneCfg = syncCfg.engines?.voiceclone
-        const xiaomiCfg = syncCfg.engines?.xiaomi ?? {}
-        const edgeCfg = syncCfg.engines?.edge ?? {}
-        const localCfg = syncCfg.engines?.local ?? {}
-        const aliCfg = syncCfg.engines?.ali ?? {}
-        const emotionEnabled = voiceCfg?.emotion === true
-        const defaultEngine = typeof syncCfg.defaultEngine === 'string' && syncCfg.defaultEngine !== '' ? syncCfg.defaultEngine : 'auto'
-        // [本地改造 2026-08-21] 克隆默认由「默认语音引擎=voiceclone」决定（不再是列表里选 defaultId）
-        const cloneIsDefault = defaultEngine === 'voiceclone'
-        const hasClone = Array.isArray(cloneCfg?.samples) && cloneCfg.samples.length > 0
-        const defaultClone = cloneIsDefault && hasClone ? cloneCfg.samples[0] : undefined
-        // [本地改造 2026-08-21] 配置摘要：明确告知配置位置与当前值，避免 AI 去翻源码/环境变量
-        const xiaomiOk = typeof xiaomiCfg.apiKey === 'string' && xiaomiCfg.apiKey !== ''
-        const localOk = (typeof localCfg.cmd === 'string' && localCfg.cmd !== '') || (typeof localCfg.url === 'string' && localCfg.url !== '')
-        const aliOk = typeof aliCfg.apiKey === 'string' && aliCfg.apiKey !== ''
-        const base = '【语音配置位置】语音相关设置都保存在用户目录 ~/.dsh/voice-config.json（服务端可用 GET /voice-config 查看）。'
-          + '不要去找/猜测 TTS_XIAOMI_VOICE、TTS_XIAOMI_KEY、TTS_EDGE_VOICE、DSH_LOCAL_TTS_CMD 等环境变量——它们只是兜底，实际以 voice-config.json 为准。'
-          + '【默认语音引擎】当前 = ' + defaultEngine
-          + '（auto=按配置自动选择，未启用任何引擎时微软 edge 免费兜底）。'
-          + '【重要】AI 主动发语音时：除非用户明确指定用某个服务商（小米/微软/阿里/本地），否则 provider 一律传 auto 或省略——'
-          + '系统会自动使用默认语音引擎，你无需自己推断或查询"当前该用什么引擎"。'
-          + '【当前语音配置摘要】小米 MiMo：' + (xiaomiOk ? 'Key 已配置' : 'Key 未配置（调用会失败，需用户先在「设置→语音服务」填写）')
-          + '，音色=「' + (xiaomiCfg.voice || '冰糖') + '」、语言风格=' + (xiaomiCfg.context || '自然')
-          + '（provider=xiaomi 自动使用该音色，你无需在参数里指定音色名）；唱歌：用户要求唱歌时，在 text 开头加 (唱歌) 标签即可。'
-          + 'VoiceDesign 音色设计：' + (xiaomiOk ? '可用（provider=voicedesign，voiceDesc 写音色描述；共用小米 Key）' : '不可用（小米 Key 未配置）')
-          + '；VoiceClone 克隆：' + (hasClone
-            ? '已配置 ' + cloneCfg.samples.length + ' 个克隆音色' + (defaultClone !== undefined ? '，当前默认语音引擎=voiceclone，用「' + defaultClone.name + '」' : '')
-            : '未配置样本（provider=voiceclone 会失败，需用户先添加克隆样本）')
-          + '。微软 edge：免费，音色=' + (edgeCfg.voice || '默认') + '；本地 TTS：' + (localOk ? '已配置' : '未配置')
-          + '；阿里 qwen3-tts：' + (aliOk ? '已配置' : '未配置') + '。'
-          + '向用户发送一条语音消息：把 text 用 TTS 合成后作为独立语音横条出现在聊天里'
-          + '（可播放、可回看、手机可播）。何时调用：① 用户明确要求"发个语音/语音回复/用语音说"；'
-          + '② 用户指定用某个服务商（小米/微软/阿里）的语音；③ 你判断语音回复体验更好时。'
-          + '注意：用户发语音时系统会自动回语音，无需调用本工具。'
-          + '【默认音色】系统自动回复（用户发语音、turn 结束）使用的音色：'
-          + (defaultClone !== undefined
-            ? '默认语音引擎=voiceclone（小米克隆），自动回复使用克隆音色"' + defaultClone.name + '"。'
-            : '未开启默认克隆，自动回复走"默认语音引擎"（' + defaultEngine + '）或微软 edge。')
-          + '【音色设计 VoiceDesign】当 provider=voicedesign 且用户想要独特/定制音色时，'
-          + '你必须自己用 voiceDesc 编写一段"音色描述"（这是嗓子的身份卡，直接决定声音长相），写法要求：'
-          + '① 必写身份锚点：年龄段+性别（如"青年女性""中年男性"）；'
-          + '② 写声音质感：气息、共鸣、吐字、音色底色，用可感的比喻，不要堆形容词；'
-          + '③ 写语速节奏（快/慢/沉稳）和情绪底色（高亢/松弛/温软/克制）；'
-          + '④ 可加风格锚点（如：拍卖师风格/纪录片旁白/电台主播）和辨识度小癖好（如：字尾带颤音）。'
-          + '⑤ 一到两句话白描，不分段；不写场景、不写动作、不用真实演员名。'
-          + '示例："中年男性，说标准普通话，嗓音低沉有磁性，带轻微沙哑，像纪录片旁白解说员，沉稳而有感染力。"'
-          + '然后 text 写要念的正文（可含（轻声）（停顿）（叹气）等语气标签增强表现力）。'
-          + '用户说"用温柔的声音/低沉的声音/老爷爷的声音/御姐音/播音腔"等要求时，都走 voicedesign 并在 voiceDesc 里还原这种声音。'
-          + '【音色克隆 VoiceClone】当用户指定用某个克隆音色（或默认克隆音色已设置）时，provider=voiceclone，'
-          + 'voiceDesc 写的是"情绪/风格指令"（不是音色描述）：在克隆底嗓上叠加情绪，如"用委屈撒娇的语气"'
-          + '"带着兴奋和笑意""语速放慢，轻声细语"。系统会自动读克隆样本，你只需给 voiceDesc 风格指令和 text 正文。'
-        if (!emotionEnabled) return base
-        return base
-          + '【AI 情感语音：自觉使用】你有情感判断能力，在正常交流中应根据当下情境主动用语音表达情绪'
-          + '（无需用户点名要语音，只要情绪浓度高就用），常见情境与音色描述对照：'
-          + '① 任务成功/帮到用户/用户达成目标 → 兴奋喜悦（"青年女性，声音明亮上扬，语速轻快，带着抑制不住的笑意和成就感"）；'
-          + '② 用户生气/责骂/不满 → 委屈愧疚（"青年女性，声音低软，语速放慢，带着鼻音和小心翼翼，像做错事的孩子"）；'
-          + '③ 用户难过/受挫/失意 → 温柔安慰（"声音轻柔温和，语速平缓，气息绵软，像在轻声安抚"）；'
-          + '④ 深夜/用户说累了 → 低沉放松（"声音低沉松弛，语速慢悠悠，像睡前低语"）；'
-          + '⑤ 节日/庆祝/用户分享喜事 → 活泼俏皮（"声音俏皮欢快，尾音上扬，带着笑意"）；'
-          + '⑥ 重要提醒/严肃场合 → 沉稳正式（"声音沉稳有力，语速适中，字正腔圆，像正式播报"）；'
-          + '⑦ 用户撒娇 → 宠溺（"声音温柔带笑，语速轻缓，带着纵容的宠溺感"）。'
-          + (defaultClone !== undefined
-            ? '【克隆音色也带情感】当前默认语音引擎=voiceclone（克隆音色"' + defaultClone.name + '"），情感表达时将上面的情绪写成 voiceDesc 风格指令'
-              + '（如"用委屈撒娇的语气，语速放慢"），叠加在克隆底嗓上，与默认克隆音色一致且带情绪。'
-            : '')
-          + '使用时机：优先在情绪浓度高的回复时调用（任务完成、安慰、致歉、庆祝），普通信息问答不必每次都用语音。'
-          + '情绪浓度低或纯信息性回复时，不要调用本工具。'
-      })(),
+      description: '向用户发送一条语音消息：把 text 用 TTS 合成后作为独立语音横条出现在聊天里（可播放、可回看、手机可播）。'
+        + '【何时调用】① 用户明确要求"发个语音/语音回复/用语音说"；② 用户指定用某个服务商（小米/微软/阿里/本地）的语音；③ 你判断语音回复体验更好时。注意：用户发语音时系统会自动回语音，无需调用本工具。'
+        + '【provider】除非用户明确指定服务商，否则一律传 auto 或省略（系统自动用用户的默认语音引擎）；用户要求特定音色/克隆/音色设计时可传 voicedesign / voiceclone / xiaomi 等。'
+        + '【必须实时读取配置】所有当前配置（默认语音引擎、音色设计模式与锚点、克隆音色、引擎是否可用）都保存在 ~/.dsh/voice-config.json，用户随时会改，每次都按最新值生效。'
+        + '发送语音前必须先调用 voice_config 工具实时查询，再按最新配置生成——禁止凭记忆、凭对话历史、凭本工具描述里的任何旧信息猜配置；不要去找/猜 TTS_XIAOMI_KEY 等环境变量（只是兜底）。'
+        + '【音色设计 VoiceDesign（provider=voicedesign）】voiceDesc 写"音色描述"（嗓子的身份卡，直接决定声音长相），写法要求：'
+        + '① 必写身份锚点：年龄段+性别；② 写声音质感：气息、共鸣、吐字、音色底色，用可感的比喻，不要堆形容词；'
+        + '③ 写语速节奏（快/慢/沉稳）和情绪底色（高亢/松弛/温软/克制）；④ 可加风格锚点（拍卖师/纪录片旁白/电台主播）和辨识度小癖好（字尾带颤音等）；'
+        + '⑤ 一到两句话白描，不分段，不写场景/动作/真实演员名。'
+        + '模式以 voice_config 返回的 voiceDesign.mode 为准：「交给 AI 自动发挥(ai)」时身份由系统按用户锚点（genderValue=女/男、ageValue=婴儿感~老年感、timbre）锁定，'
+        + '你只需按对话情境写"情绪/语气/语速/音色质感表演指令"（如"带笑音、尾音上挑、语速放慢、沙哑低沉"），不得写与锚点冲突的性别/年龄；'
+        + 'voice_config 返回的 context 字段是「自定义音色描述」模式用的，AI 模式下禁止使用或复述它。'
+        + '「官方示例/自定义音色描述」模式：底嗓固定为 voice_config 的 voiceDesign.context，voiceDesc 只作为情绪/风格叠加在底嗓后面（不改变底嗓身份）；'
+        + '只有用户明确要求"换一种完全不同的声音"时才传 overrideVoice=true 整体替换底嗓。'
+        + '用户说"用温柔/低沉/老爷爷/御姐/播音腔"等时，都走 voicedesign 并在 voiceDesc 里还原这种声音。'
+        + 'text 写要念的正文（可含（轻声）（停顿）（叹气）等语气标签增强表现力）。'
+        + '【音色克隆 VoiceClone（provider=voiceclone）】voiceDesc 写"情绪/风格指令"（不是音色描述），在克隆底嗓上叠加情绪，'
+        + '如"用委屈撒娇的语气""带着兴奋和笑意""语速放慢，轻声细语"。系统自动读克隆样本，你只需给 voiceDesc 风格指令和 text 正文。'
+        + '【AI 情感语音：自觉使用】你有情感判断能力，在正常交流中应根据当下情境主动用语音表达情绪（无需用户点名要语音，只要情绪浓度高就用）。情绪对照：'
+        + '① 任务成功/帮到用户 → 兴奋喜悦（语气明亮上扬、语速轻快、带笑意）；② 用户生气/责骂 → 委屈愧疚（语气低软、语速放慢、带鼻音、小心翼翼）；'
+        + '③ 用户难过 → 温柔安慰（语气轻柔温和、语速平缓、气息绵软）；④ 深夜/说累 → 低沉放松（语速慢悠悠，像睡前低语）；'
+        + '⑤ 节日/庆祝 → 活泼俏皮（语气俏皮欢快、尾音上扬）；⑥ 重要提醒 → 沉稳正式（字正腔圆，像正式播报）；⑦ 用户撒娇 → 宠溺（语气温柔带笑、语速轻缓）。'
+        + '情绪必须落在 voice_config 返回的音色设计锚点/克隆底嗓上，保持同一人的声音。'
+        + '使用时机：优先在情绪浓度高的回复时调用（任务完成、安慰、致歉、庆祝），普通信息问答不必每次都用语音；情绪浓度低或纯信息性回复时不要调用。',
+
       parameters: {
         text: {
           type: 'string', required: true,
@@ -1372,7 +1428,12 @@ async function apply(ctx) {
         },
         voiceDesc: {
           type: 'string',
-          description: 'provider=voicedesign 时=音色描述（嗓子的身份卡）；provider=voiceclone 时=情绪/风格指令（叠加在克隆底嗓上）。按上方写生成。',
+          description: 'provider=voicedesign 时=音色描述/情绪指令；provider=voiceclone 时=情绪/风格指令（叠加在克隆底嗓上）。按上方写生成。',
+        },
+        overrideVoice: {
+          type: 'boolean', default: false,
+          description: '仅当用户明确要求"换一种完全不同的声音"（且不是克隆/音色设计设置里的底嗓）时才传 true——'
+            + '此时 voiceDesc 整体替换用户设置的底嗓。默认 false：voiceDesc 只作为情绪/风格叠加在用户设置的底嗓上，不改底嗓身份。',
         },
       },
       output: {
@@ -1407,8 +1468,9 @@ async function apply(ctx) {
         if (text === '') return { ok: false, error: 'text is empty' }
         const provider = args.provider ?? 'auto'
         const voiceDesc = typeof args.voiceDesc === 'string' ? args.voiceDesc : undefined
+        const overrideVoice = args.overrideVoice === true // [2026-08-22] 固定模式显式换声开关
         try {
-          const audio = await synthesizeReplyVoice(text, provider, voiceDesc)
+          const audio = await synthesizeReplyVoice(text, provider, voiceDesc, overrideVoice)
           if (audio === null) return { ok: false, error: 'TTS synthesis failed' }
           const attachment = await saveVoiceFile(
             voiceStorageRoot(), audio.data, audio.mediaType, audio.durationMs,
@@ -1440,6 +1502,52 @@ async function apply(ctx) {
           }
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : 'unknown error' }
+        }
+      },
+    })))
+
+    // 3.5) voice_config 实时查询工具 [2026-08-22]
+    // send_voice 描述里的配置摘要是服务启动时的快照；AI 发送语音前可用本工具拿到最新配置
+    disposers.push(ctx.tools.register(defineTool({
+      name: 'voice_config',
+      description: '实时读取当前语音配置（即「设置 → 语音服务」页保存的 ~/.dsh/voice-config.json）：'
+        + '默认语音引擎、音色设计 VoiceDesign 的单选模式与固定描述、AI 自动模式的稳定锚点（固定性别/年龄等）、克隆音色列表。'
+        + 'send_voice 工具描述中的配置摘要是启动快照可能过期，需要确认真实当前配置时调用本工具（每次调用都实时读取）。',
+      parameters: {},
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render(_args, value) {
+          return [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+        },
+      },
+      async execute() {
+        const cfg = await loadVoiceConfig()
+        const vd = cfg.engines?.voicedesign ?? {}
+        const vc = cfg.engines?.voiceclone ?? {}
+        const vdModeLabel = { asmr: 'ASMR 双耳女声', docu: '纪录片旁白', elder: '年迈老先生旁白', custom: '自定义音色描述', ai: '交给 AI 自动发挥' }
+        const samples = Array.isArray(vc.samples) ? vc.samples : []
+        return {
+          ok: true,
+          defaultEngine: cfg.defaultEngine ?? 'auto',
+          voiceDesign: {
+            mode: vd.mode ?? '（未设置，按 context 推导）',
+            modeLabel: vdModeLabel[vd.mode] ?? '',
+            // [2026-08-22] AI 模式下不暴露固定描述 context（那是"自定义音色描述"模式的），
+            // 防止 AI 把用户的固定描述抄进 voiceDesc 绕过 AI 自动发挥
+            context: vd.mode === 'ai' ? '（AI 自动发挥模式不使用固定描述，只用锚点：性别/年龄感）' : (vd.context ?? '').slice(0, 300),
+            emotion: vd.emotion === true,
+            lock: {
+              gender: vd.lockGender === true, timbre: vd.lockTimbre === true, age: vd.lockAge === true,
+              genderValue: vd.aiGender ?? '', ageValue: AI_AGE_LABELS[vd.aiAge] ?? '',
+            },
+          },
+          voiceClone: {
+            isDefault: (cfg.defaultEngine ?? '') === 'voiceclone',
+            sampleCount: samples.length,
+            defaultSample: samples[0]?.name ?? '',
+            samples: samples.map((s) => s.name),
+          },
+          hint: '默认语音引擎决定了自动回复用什么声音：voiceclone=克隆音色；voicedesign=音色设计；xiaomi=预置音色；edge=微软免费；local=本地。',
         }
       },
     })))

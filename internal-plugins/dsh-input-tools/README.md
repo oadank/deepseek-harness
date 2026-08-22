@@ -69,6 +69,7 @@ powershell -ExecutionPolicy Bypass -File scripts\setup-profile.ps1
 # Linux/macOS：
 bash scripts/setup-profile.sh
 pnpm install
+pnpm run build:lib       # ⚠️ 必须！全新 clone 无编译产物，跳过会报 Failed to resolve @deepseek-ai/dsh-client-web
 pnpm run build:web
 dsh --profile web
 ```
@@ -103,7 +104,7 @@ cd deepseek-harness
 git checkout 141eb6fef8        # 官方 dsh-0.1.0-rc.8 基线
 # 打补丁（脚本自动探测/输入源码位置）：
 powershell -ExecutionPolicy Bypass -File <插件目录>\patches\apply-voice-patch.ps1
-pnpm install && pnpm run build:web && dsh --profile web
+pnpm install && pnpm run build:lib && pnpm run build:web && dsh --profile web
 ```
 
 ### 方案 B：直接用整合版 fork（推荐）
@@ -112,7 +113,7 @@ pnpm install && pnpm run build:web && dsh --profile web
 git clone https://github.com/oadank/deepseek-harness.git
 cd deepseek-harness
 powershell -ExecutionPolicy Bypass -File scripts\setup-profile.ps1
-pnpm install && pnpm run build:web && dsh --profile web
+pnpm install && pnpm run build:lib && pnpm run build:web && dsh --profile web
 ```
 
 > 补丁基线官方 rc.8（141eb6fef8），官方后续更新可能不兼容，请先 checkout 该基线再打。回滚：`git apply -R`。

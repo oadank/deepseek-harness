@@ -3139,8 +3139,7 @@ index 0000000000..33a3eb7d19
 +}
 +
 +/** Default ffmpeg binary; overridable for non-Windows deployments. */
-+export const FFMPEG_BIN = process.env.DSH_VOICE_FFMPEG_BIN
-+  ?? 'C:\\Users\\oadan\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffmpeg.exe'
++export const FFMPEG_BIN = process.env.DSH_VOICE_FFMPEG_BIN ?? 'ffmpeg'
 +
 +/** Default local ASR endpoint (sherpa-onnx SenseVoice service). */
 +export const ASR_SERVICE_URL = process.env.DSH_ASR_SERVICE_URL ?? 'http://127.0.0.1:18790/transcribe'
