@@ -12,6 +12,26 @@
 > 只想用官方原版？直接 `npx @deepseek-ai/dsh web`，或看[官方仓库](https://github.com/deepseek-ai/deepseek-harness)。
 > 下面的语音功能是本项目（fork + 插件）加的，官方原版没有。
 
+## 界面预览
+
+**输入框工具条**（左起：图片/🎙 录音/+/权限/余额/模型）
+
+![输入框工具条](docs/screenshots/input-toolbar.png)
+
+**语音消息**（录音后自动识别成文字发送，AI 也能用语音回）
+
+![语音消息](docs/screenshots/voice-message-bubbles.png)
+
+**语音能力与 ASR 配置**（引擎选择、音色设计、克隆、ASR）
+
+![语音能力与 ASR](docs/screenshots/voice-capabilities-asr.png)
+
+**TTS 引擎设置**（小米 / 本地 MeloTTS / 阿里 三选）
+
+| 小米 TTS | 本地 TTS / 阿里 |
+|---|---|
+| ![小米TTS](docs/screenshots/voice-settings-xiaomi.png) | ![本地TTS与阿里](docs/screenshots/voice-settings-local-ali.png) |
+
 ---
 
 ## 一、安装
