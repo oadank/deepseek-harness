@@ -1,8 +1,9 @@
 # 本地源码改造清单（LOCAL MODIFICATIONS）
 
 > 本项目（oadank/deepseek-harness）基于官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（MIT）二次开发。
-> 本文档的**唯一权威依据 = `git diff <官方基线> master`**（基线 = 官方 `release/dsh-0.1.0-rc.8`，即 merge-base `141eb6fef8`，PR #2783）。
-> 本机验证命令：`git diff 141eb6fef83422698aef7a981029e843e8161534 master --stat`（排除 tests/i18n/构建产物后共 **57 个源码文件**）。
+> 本文档的**唯一权威依据 = 本地 master 相对官方最新版（upstream/master = `dsh-0.1.1-rc.2`，`b150a551b8`）的独有提交改动**。
+> 本地代码 = 官方最新版 + 本地 40 个独有提交（其中含"同步补丁"类提交，把官方最新代码同步进来后再做本地改造）。
+> 本机验证命令：`git log master --not upstream/master --name-only`（排除 tests/i18n/构建产物后共 **62 个源码文件**）。
 > 升级上游 / 排查问题 / 想了解"本项目到底改了什么"时，以本文档 + 上述命令为准。
 
 **一句话背景**：官方 dsh 对图片/语音只有"模型支持就直接发，不支持就报错"的态度。本项目在框架层改造，让**纯文本模型**（如 deepseek-v4-flash）也能用图片（转路径文本 + 插件 look_image 识图）和语音（ASR/TTS 全链路），同时保留完整消息体验。
@@ -85,11 +86,13 @@
 5. **slots.ts 的 voice-actions**：上游合 slot 声明时可能冲突。
 6. **测试同步**：大量 e2e 测试 / snapshots 因 props 结构变更同步改过，升级时测试可能红。
 
-## 附：真实改动文件清单（57 个源码文件）
+## 附：真实改动文件清单（62 个源码文件）
 
 ```bash
-git diff 141eb6fef83422698aef7a981029e843e8161534 master --name-only \
-  | grep packages/ | grep -v "tests/\|snapshots/\|i18n\|locale.*\.json\|\.d\.ts\|/lib/"
+git log master --not upstream/master --name-only --format="" \
+  | grep packages/ | grep src/ | grep -v "tests/\|snapshots/\|\.d\.ts\|/lib/" | sort -u
 ```
+
+> 注：`BalanceMeter.tsx` / `.module.css` 已在后续提交中删除（余额显示改由插件提供），故不计入当前清单。
 
 核心：`llm-deepseek/serialize.ts`、`llm-pi-ai/context.ts`、`attachment-local/store.ts`、`host/apiproxy/{api-proxy,voice,edge-tts}.ts`、`host/apiproxy/api/*`、`core/session/{types,known-event-types}.ts`、`client/ui-conversation/src/client/{apply,service,locales,slots}.ts` + `chat/*`、`runtime/{contract/session,sessions/session}.ts`、`connection/*`、`acp/acp/src/index.ts`、`subprocess/spawn.ts`、`shell/pwsh-local` 等。
