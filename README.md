@@ -43,7 +43,7 @@
 > | 23 | `acp/acp/src/index.ts`（+95 行）、`api/remotes/src/client/index.ts` | ACP 扩展：流式思考（assistant/chunk reasoning-delta）→ `agent_thought_chunk`、工具事件 → `tool_call` 推送映射 | 外部 ACP 客户端（IDE 等）要**实时看到模型的思考过程和工具调用**，官方 ACP 不推这些事件 | ✅ |
 > | 24 | `host/directory-picker-auto/src/resolve.ts` | 加 `DSH_FORCE_BROWSE_PICKER=1` 环境变量 → 强制用 browse（网页目录树） | **Windows nssm 服务跑在 session 0，原生 IFileOpenDialog COM 弹窗没有交互桌面弹不出来**（"添加工作区"点了没反应，你亲测过的坑）。browse 是纯 HTTP 目录列表，session 0 完全可用 | ✅ |
 > | 25 | `compaction/command-compact`、`goal/command-goal`、`feedback/command-feedback`、`session-query/session-log-export`、`plan/plan-mode`、`interaction/permission-presets`、`client/modules`、`client/ui-theme` | **命令提示文案中文化**：/compact、/goal、/feedback、会话日志导出等命令的用法、错误提示从英文改成中文（+ 少量 import/声明调整） | 中文用户看英文命令反馈不友好——把所有用户看得见的命令反馈汉化 | ✅ |
-> | 26 | 前端 **client lib 重建流程**（`build:lib:client` + `build:web`） | 不是源码改动，是**构建流程**：改前端 src 后必须先 `build:lib:client` 再 `build:web` | 前端组件（ui-conversation/connection）是**运行时插件 lib**，apps/web 只是壳——只跑 build:web 用的旧 lib，图标位置/余额/语音前端面**全不生效**（实测踩坑：界面"毛变化没有"的根因） | ✅ |
+> | 26 | 前端 **client lib 重建流程**（`build:lib:client` + `build:web`） | 不是源码改动，是**改前端代码后必须执行的打包步骤**：网页界面分两层——**壳**（apps/web，浏览器先加载的空架子）和**家具**（ui-conversation/connection 等独立打包的组件，运行时搬进壳里）。改家具代码 → 先重新打家具（`build:lib:client`）→ 再重刷外墙（`build:web`）→ 浏览器强制刷新（Ctrl+F5 清缓存） | 之前只跑 `build:web`（只重刷外墙），家具还是旧的 → 图标位置/余额/语音前端改动**全不生效**（"界面毛变化没有"的根因，实测踩过的坑） | ✅ |
 >
 > > ⚠️ 注：**这套体验只能在本项目代码上成立**——官方主线面向官方云模型，不会也不该接受这些改动（图片序列化、语音全链路、余额、事件类型、前端渲染层，跨 10+ 包、25+ 个文件）。
 
