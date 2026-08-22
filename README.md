@@ -6,10 +6,10 @@
 
 ---
 
-## 快速开始（含内置语音插件）
+## 快速开始（含语音插件）
 
-本 fork **内置了语音能力插件**（`internal-plugins/dsh-input-tools/`：语音输入/多引擎 TTS/ASR/
-音色克隆/语音气泡/AI 语音回复），clone 后一键配置即可用：
+本 fork 配套**语音能力插件** `@oadank/dsh-input-tools`（语音输入/多引擎 TTS/ASR/
+音色克隆/语音气泡/AI 语音回复），插件由 npm 安装、`scripts\setup-profile.ps1` 一键配置，clone 后即用：
 
 ```bash
 git clone https://github.com/oadank/deepseek-harness.git
@@ -28,9 +28,10 @@ dsh --profile web
 > 也可以把 INSTALL.md 发给任意 AI 助手让它帮你装。
 
 可选本地 ASR（离线识别）：Windows 运行
-`internal-plugins\dsh-input-tools\scripts\install-asr.ps1`。
-升级：`git pull` 后重跑 setup 脚本即可同步插件。详细说明见
-[插件 README](internal-plugins/dsh-input-tools/README.md)。
+`%USERPROFILE%\.dsh\profiles\node_modules\@oadank\dsh-input-tools\scripts\install-asr.ps1`
+（先跑 `scripts\setup-profile.ps1` 从 npm 装好插件）。
+升级：重跑 setup 脚本即从 npm 拉取最新插件。插件仓库见
+[oadank/dsh-input-tools](https://github.com/oadank/dsh-input-tools)。
 
 ---
 

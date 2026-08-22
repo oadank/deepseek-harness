@@ -99,15 +99,17 @@ nssm start dsh-web
 ## 七、可选：本地语音识别（离线 ASR，约 260MB）
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File internal-plugins\dsh-input-tools\scripts\install-asr.ps1
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\profiles\node_modules\@oadank\dsh-input-tools\scripts\install-asr.ps1"
 ```
+
+> 插件由 `scripts\setup-profile.ps1` 从 npm 安装（不再内置于仓库 internal-plugins）。
 
 装完到 设置 → 语音服务 → ASR，点「检测已安装」自动填入。
 
 ## 八、可选：本地语音合成（离线 TTS）
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File internal-plugins\dsh-input-tools\scripts\install-local-tts.ps1
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\profiles\node_modules\@oadank\dsh-input-tools\scripts\install-local-tts.ps1"
 ```
 
 装完把脚本最后提示的那行命令，填进 设置 → 语音服务 → 本地 TTS →「本地命令」，点「试听本地 TTS」验证。
