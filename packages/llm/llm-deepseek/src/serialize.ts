@@ -81,9 +81,10 @@ function flattenText(blocks: ContentBlock[]): string {
 }
 
 /** [本地改造 2026-08-16] 把 image 块转成含本地附件路径的文本（参考 dsh-vscode-layout 补丁）：
- * 文本模型收到路径后，必须通过视觉 MCP（mcp__visionqa__look / mcp__zai-vision__analyze_image）
- * 识图。路径带扩展名（jpeg→.jpg / png→.png / webp→.png，attachment-local 存储时已生成
- * 带扩展名别名，见 store.ts extensionAliasPath），zai-vision 等按扩展名校验的工具可用。 */
+ * 文本模型收到路径后，调用插件自研 look_image 工具识图（默认 describe；reverse=像素级反推
+ * 生图提示词；text=提取文字）。路径带扩展名（jpeg→.jpg / png→.png / webp→.png，
+ * attachment-local 存储时已生成带扩展名别名，见 store.ts extensionAliasPath），
+ * 保证 look_image 按 image_path 直接 readFile 可读。不依赖外部视觉 MCP。 */
 function imageAsText(block: ContentBlock): ContentBlock {
   const ref = (block as { attachment?: { attachmentId?: unknown; name?: string; mediaType?: string } }).attachment
   const rawId = typeof ref?.attachmentId === 'string' ? ref.attachmentId : ''
