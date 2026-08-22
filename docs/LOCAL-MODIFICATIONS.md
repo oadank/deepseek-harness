@@ -1,9 +1,15 @@
 # 本地源码改造清单（LOCAL MODIFICATIONS）
 
 > 本项目（oadank/deepseek-harness）基于官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（MIT）二次开发。
-> 本文档的**唯一权威依据 = 本地 master 相对官方最新版（upstream/master = `dsh-0.1.1-rc.2`，`b150a551b8`）的独有提交改动**。
-> 本地代码 = 官方最新版 + 本地 40 个独有提交（其中含"同步补丁"类提交，把官方最新代码同步进来后再做本地改造）。
-> 本机验证命令：`git log master --not upstream/master --name-only`（排除 tests/i18n/构建产物后共 **62 个源码文件**）。
+> 本文档的**唯一权威依据 = 本地 master 相对官方最新版（upstream/master = `dsh-0.1.1-rc.2`，`b150a551b8`）的**本地新增代码**差异**。
+> 本地代码 = 官方最新版 + 本地 40 个独有提交（其中多数是 docs/README 和"同步插件/同步补丁"提交——后者只是把官方代码搬进本地，**不算本地改造**）。
+> 真正"本地新增为主"的改造文件只有 **25 个**（本地新增 ≥20 行且新增 > 删除，排除 tests/i18n/构建产物）。
+> 本机验证命令：
+> ```bash
+> git diff upstream/master master --numstat | grep packages/ | grep src/ \
+>   | grep -v "tests/\|snapshots/\|\.d\.ts\|/lib/" \
+>   | awk '$1+0>=20 && $1+0>$2+0' | sort -rn
+> ```
 > 升级上游 / 排查问题 / 想了解"本项目到底改了什么"时，以本文档 + 上述命令为准。
 
 **一句话背景**：官方 dsh 对图片/语音只有"模型支持就直接发，不支持就报错"的态度。本项目在框架层改造，让**纯文本模型**（如 deepseek-v4-flash）也能用图片（转路径文本 + 插件 look_image 识图）和语音（ASR/TTS 全链路），同时保留完整消息体验。
@@ -86,13 +92,35 @@
 5. **slots.ts 的 voice-actions**：上游合 slot 声明时可能冲突。
 6. **测试同步**：大量 e2e 测试 / snapshots 因 props 结构变更同步改过，升级时测试可能红。
 
-## 附：真实改动文件清单（62 个源码文件）
+## 附：真实改造文件清单（25 个源码文件，本地新增为主）
 
-```bash
-git log master --not upstream/master --name-only --format="" \
-  | grep packages/ | grep src/ | grep -v "tests/\|snapshots/\|\.d\.ts\|/lib/" | sort -u
-```
+| 新增行 | 文件 | 归属 |
+|---|---|---|
+| +506 | `host/apiproxy/src/voice.ts` | 语音核心（新增文件） |
+| +378 | `host/apiproxy/src/api-proxy.ts` | 语音三规则 + send_voice + 余额接入 |
+| +270 | `ui-conversation/src/client/chat/MessageItem.tsx` | 语音消息气泡 |
+| +119 | `host/apiproxy/src/edge-tts.ts` | Edge TTS 引擎（新增文件） |
+| +108 | `llm/llm-deepseek/src/serialize.ts` | 图片→路径文本（imageAsText） |
+| +94 | `acp/acp/src/index.ts` | ACP 扩展 |
+| +92 | `ui-conversation/src/client/contract/slots.ts` | voice-actions 槽 |
+| +79 | `ui-conversation/src/client/conversation-nodes/voice-reply.ts` | 语音回复节点（新增文件） |
+| +72 | `host/apiproxy/src/api/sessions.schema.ts` | 会话 RPC schema |
+| +71 | `ui-conversation/src/client/service.ts` | 前端服务扩展 |
+| +67 | `ui-conversation/src/client/chat/TtsVoiceCard.tsx` | AI 语音卡片（新增文件） |
+| +61 | `host/apiproxy/src/api/sessions.ts` | 会话 RPC |
+| +53 | `ui-conversation/src/client/apply.ts` | 槽注册 |
+| +43 | `client/connection/src/client/fixture.ts` | 测试 fixture |
+| +40 | `ui-conversation/src/client/locales.ts` | 前端文案 |
+| +37 | `client/modules/src/index.ts` | 模块注册 |
+| +32 | `host/apiproxy/src/api/balance.ts` | 余额 RPC（新增文件） |
+| +30 | `host/apiproxy/src/api/balance.schema.ts` | 余额 RPC schema（新增文件） |
+| +28 | `ui-conversation/src/client/conversation-nodes/turn-error.ts` | 配套 |
+| +25 | `host/apiproxy/src/fetch/client.ts` | 配套 |
+| +24 | `llm/llm/src/types.ts` | voice 内容块类型 |
+| +23 | `client/runtime/src/client/sessions/session.ts` | sendVoiceMessage RPC |
+| +20 | `llm/llm-pi-ai/src/catalog.ts` | 模型目录 |
+| +20 | `ui-conversation/src/client/chat/VoiceReplyNodeView.tsx` | 语音回复渲染（新增文件） |
+| +20 | `client/ui-theme/src/boot-theme.ts` | 主题配套 |
 
-> 注：`BalanceMeter.tsx` / `.module.css` 已在后续提交中删除（余额显示改由插件提供），故不计入当前清单。
-
-核心：`llm-deepseek/serialize.ts`、`llm-pi-ai/context.ts`、`attachment-local/store.ts`、`host/apiproxy/{api-proxy,voice,edge-tts}.ts`、`host/apiproxy/api/*`、`core/session/{types,known-event-types}.ts`、`client/ui-conversation/src/client/{apply,service,locales,slots}.ts` + `chat/*`、`runtime/{contract/session,sessions/session}.ts`、`connection/*`、`acp/acp/src/index.ts`、`subprocess/spawn.ts`、`shell/pwsh-local` 等。
+> 另有关联小改（本地新增 <20 行）：`attachment-local/store.ts`（扩展名别名）、`llm-pi-ai/context.ts` + `adapter.ts`（imageAsText 配套）、`llm-deepseek/adapter.ts`、`core/session/{types,known-event-types}.ts`、`client/runtime/contract/session.ts`、`connection/api-request-trust.ts`、`subprocess/spawn.ts`、`shell/pwsh-local` 等。
+> 注：`BalanceMeter.tsx` 已删除（余额显示改由插件提供），不计入。
