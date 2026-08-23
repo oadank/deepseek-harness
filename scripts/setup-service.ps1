@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # dsh-web Windows 服务一键注册脚本（nssm）
 # 自动处理三个最常见的坑：
 #   ① node 路径：自动用 (Get-Command node).Source，不再手填错路径
@@ -35,8 +35,28 @@ $RepoRoot = Split-Path -Parent $ScriptDir
 Write-Host "==== dsh-web 服务注册 ====" -ForegroundColor Cyan
 
 # ---- 1. 前置检查：nssm / node / 仓库 ----
+# [BUG-11 修复 2026-08-23] winget 常不在 PATH（WindowsApps 目录，需 App Execution Alias）——
+# Get-Command 找不到时探测常见路径，再不行给明确提示，不要静默失败。
+function Find-Winget {
+  $w = Get-Command winget -ErrorAction SilentlyContinue
+  if ($w) { return $w.Source }
+  foreach ($p in @(
+    "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe",
+    "C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*\winget.exe"
+  )) {
+    $found = Get-ChildItem $p -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { return $found.FullName }
+  }
+  return $null
+}
 $nssm = Get-Command nssm -ErrorAction SilentlyContinue
 if (-not $nssm) {
+  $winget = Find-Winget
+  if (-not $winget) {
+    Write-Host "  未找到 nssm，且 winget 也不可用（不在 PATH）。" -ForegroundColor Red
+    Write-Host "  请手动安装：winget install nssm  或从 https://nssm.cc 下载解压到 PATH" -ForegroundColor Yellow
+    exit 1
+  }
   Write-Host "  未找到 nssm，正在安装（winget）..." -ForegroundColor Yellow
   winget install nssm --accept-package-agreements --accept-source-agreements | Out-Null
   $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
