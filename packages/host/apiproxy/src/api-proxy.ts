@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -12,7 +12,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentId, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
@@ -52,6 +52,7 @@ import {
   type SessionLogCompressionLevel,
 } from './session-export.ts'
 import { readVoiceFile, saveVoiceFile, synthesizeReplyVoice, transcribeVoice, voiceObjectPath, voiceStorageRoot } from './voice.ts'
+import { readImageFile, saveImageFile, imageStorageRoot } from './image.ts'
 import type { VoiceAttachmentRef } from './api/sessions.ts'
 import type { SessionRawArtifact } from '@deepseek-ai/dsh-session-persistence'
 import {
@@ -290,6 +291,24 @@ function imageBlockIn(content: unknown, match: (ref: ImageAttachmentRef) => bool
 
 /** Search every durable event carrier that can own model-visible content. */
 function imageInEvent(event: SessionEvent, match: (ref: ImageAttachmentRef) => boolean): ImageAttachmentRef | undefined {
+  // [本地改造 2026-08-23] 助手图片回复事件：payload 直接携带 attachmentId（非 image 块）。
+  if (event.type === 'image/reply') {
+    const { attachmentId, mediaType, bytes, width, height } = event.data as {
+      attachmentId: string
+      mediaType: string
+      bytes: number
+      width: number
+      height: number
+    }
+    const ref: ImageAttachmentRef = {
+      attachmentId: attachmentId as AttachmentId,
+      mediaType: mediaType as ImageAttachmentRef['mediaType'],
+      bytes,
+      width: width ?? 1,
+      height: height ?? 1,
+    }
+    return match(ref) ? ref : undefined
+  }
   const data = event.data as {
     content?: unknown
     message?: { content?: unknown }
@@ -385,6 +404,18 @@ function referencedImage(events: readonly SessionEvent[], attachmentId: string):
     if (found !== undefined) return found
   }
   return undefined
+}
+
+/** Map a file extension to a supported image media type (for sendImageMessage). */
+function sniffImageMediaType(path: string): ImageAttachmentRef['mediaType'] | undefined {
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  switch (ext) {
+    case 'png': return 'image/png'
+    case 'jpg': case 'jpeg': return 'image/jpeg'
+    case 'gif': return 'image/gif'
+    case 'webp': return 'image/webp'
+    default: return undefined
+  }
 }
 
 /** Strict browser-zone profile: UTC or an IANA Area/Location-style identifier. */
@@ -2790,6 +2821,76 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           return err(request, {
             code: 'internal',
             message: 'sendVoiceMessage failed',
+            details: {},
+          })
+        }
+      },
+
+      async sendImageMessage(request) {
+        // [本地改造 2026-08-23] 主动发图片消息：读本地图片文件 → 落盘附件存储 → 追加 image/reply
+        const { sessionId, imagePath } = request.payload
+        try {
+          const mediaType = sniffImageMediaType(imagePath)
+          if (mediaType === undefined) {
+            return err(request, {
+              code: 'internal',
+              message: 'unsupported image type (png/jpg/gif/webp/bmp expected)',
+              details: {},
+            })
+          }
+          const data = new Uint8Array(await readFile(imagePath))
+          const attachment = await saveImageFile(imageStorageRoot(), data, mediaType)
+          const agent = ctx.agents.get(sessionId)
+          if (agent === undefined || agent.session.id !== sessionId) {
+            return err(request, {
+              code: 'session-not-found',
+              message: 'no attached session for sendImageMessage',
+              details: { sessionId },
+            })
+          }
+          const turn = agent.session.events
+            .filter((event): event is SessionEvent & { type: 'turn/start' } => event.type === 'turn/start')
+            .at(-1)?.data.turn ?? 0
+          agent.session.append('image/reply', {
+            turn,
+            attachmentId: attachment.attachmentId,
+            mediaType: attachment.mediaType,
+            bytes: attachment.bytes,
+            width: attachment.width,
+            height: attachment.height,
+          })
+          return ok(request, { accepted: true as const })
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'internal',
+            message: `sendImageMessage failed: ${String(error)}`,
+            details: {},
+          })
+        }
+      },
+
+      async image(request) {
+        // [本地改造 2026-08-23] 读取 image/reply 存储的图片对象（base64），供前端渲染/放大。
+        const { sessionId, attachmentId } = request.payload
+        try {
+          const state = await readSessionState(sessionId)
+          const ref = referencedImage(state.events, attachmentId)
+          if (ref === undefined) {
+            return err(request, {
+              code: 'attachment-error',
+              message: 'Image object is not referenced by this session.',
+              details: { reason: 'IMAGE_NOT_REFERENCED' },
+            })
+          }
+          const stored = await readImageFile(imageStorageRoot(), ref)
+          return ok(request, {
+            image: stored.ref,
+            data: Buffer.from(stored.data).toString('base64'),
+          })
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'internal',
+            message: `Unable to read image object: ${String(error)}`,
             details: {},
           })
         }

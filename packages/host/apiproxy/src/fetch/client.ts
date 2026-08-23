@@ -34,6 +34,8 @@ import {
   sessionVoiceTtsValueSchema,
   sessionVoiceValueSchema,
   sessionSendVoiceMessageValueSchema,
+  sessionSendImageMessageValueSchema,
+  sessionImageValueSchema,
 } from '../api/sessions.schema.ts'
 import {
   workspaceArchiveSessionValueSchema,
@@ -105,6 +107,8 @@ export interface IApiClient {
     voiceAsr(payload: RequestPayload<'session.voiceAsr'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.voiceAsr'>>>
     voiceTts(payload: RequestPayload<'session.voiceTts'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.voiceTts'>>>
     sendVoiceMessage(payload: RequestPayload<'session.sendVoiceMessage'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.sendVoiceMessage'>>>
+    sendImageMessage(payload: RequestPayload<'session.sendImageMessage'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.sendImageMessage'>>>
+    image(payload: RequestPayload<'session.image'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.image'>>>
     updateQueue(payload: RequestPayload<'session.updateQueue'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.updateQueue'>>>
     cancel(payload: RequestPayload<'session.cancel'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.cancel'>>>
   }
@@ -196,6 +200,8 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
   'session.voiceAsr': sessionVoiceAsrValueSchema,
   'session.voiceTts': sessionVoiceTtsValueSchema,
   'session.sendVoiceMessage': sessionSendVoiceMessageValueSchema,
+  'session.sendImageMessage': sessionSendImageMessageValueSchema,
+  'session.image': sessionImageValueSchema,
   'session.updateQueue': sessionUpdateQueueValueSchema,
   'session.cancel': sessionCancelValueSchema,
   'subagent.list': subagentListValueSchema,
@@ -441,6 +447,8 @@ export abstract class AbstractApiClient implements IApiClient {
     voiceAsr: (payload, signal) => this.callUnary('session.voiceAsr', payload, signal),
     voiceTts: (payload, signal) => this.callUnary('session.voiceTts', payload, signal),
     sendVoiceMessage: (payload, signal) => this.callUnary('session.sendVoiceMessage', payload, signal),
+    sendImageMessage: (payload, signal) => this.callUnary('session.sendImageMessage', payload, signal),
+    image: (payload, signal) => this.callUnary('session.image', payload, signal),
     updateQueue: (payload, signal) => this.callUnary('session.updateQueue', payload, signal),
     cancel: (payload, signal) => this.callUnary('session.cancel', payload, signal),
   }

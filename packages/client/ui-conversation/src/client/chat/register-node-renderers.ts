@@ -8,6 +8,7 @@ import {
 } from './MessageItem.tsx'
 import { TurnTailNodeView } from './TurnTailNodeView.tsx'
 import { VoiceReplyNodeView } from './VoiceReplyNodeView.tsx'
+import { ImageReplyNodeView } from './ImageReplyNodeView.tsx'
 
 /**
  * Register this package's business renderers behind the keyed Chat Node seat.
@@ -58,6 +59,8 @@ export function registerChatNodeRenderers(ctx: Context): void {
   }, TurnTailNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
     { name: 'conversation.chat.node', key: 'voice-reply', locale: NS }, VoiceReplyNodeView))
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+    { name: 'conversation.chat.node', key: 'image-reply', locale: NS }, ImageReplyNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
     { name: 'conversation.chat.node', key: 'unknown', locale: NS }, UnknownNodeView))
 }

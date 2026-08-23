@@ -166,6 +166,13 @@ export class FakeApiClient implements IApiClient {
     sendVoiceMessage: (payload: unknown) => this.record(
       'session.sendVoiceMessage', payload, Promise.resolve(ok({ accepted: true as const })),
     ),
+    sendImageMessage: (payload: unknown) => this.record(
+      'session.sendImageMessage', payload, Promise.resolve(ok({ accepted: true as const })),
+    ),
+    image: (payload: unknown) => this.record('session.image', payload, Promise.resolve(ok({
+      image: { attachmentId: 'a' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
+      data: 'AA==',
+    }))),
     updateQueue: (payload: unknown) => this.record('session.updateQueue', payload, this.onUpdateQueue(payload)),
     cancel: (payload: unknown) => this.record('session.cancel', payload, this.onCancel(payload)),
   }

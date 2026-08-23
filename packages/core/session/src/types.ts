@@ -353,6 +353,27 @@ export interface SessionEventMap {
     /** [本地改造 2026-08-21] 合成的正文（转写文本），供语音条显示与复制。 */
     transcript?: string
   }
+  /**
+   * [本地改造 2026-08-23] 助手侧图片回复：agent 主动发送的图片，作为一条独立
+   * 持久图片消息（与用户附件图同级）。前端渲染为独立图片横条（复用
+   * MessageImage，可点开放大）。log-only：不进入模型历史重建。
+   */
+  'image/reply': {
+    /** The turn whose assistant activity this image belongs to. */
+    turn: number
+    /** Opaque storage identifier of the image object. */
+    attachmentId: string
+    /** Image container format of the stored object. */
+    mediaType: string
+    /** Exact encoded byte length. */
+    bytes: number
+    /** Intrinsic encoded width in pixels (mirrors ImageAttachmentRef). */
+    width: number
+    /** Intrinsic encoded height in pixels (mirrors ImageAttachmentRef). */
+    height: number
+    /** Optional display caption. */
+    alt?: string
+  }
 }
 
 /** The appendable event-type keys of {@link SessionEventMap}, plugin-merged extensions included. */

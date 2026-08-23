@@ -2617,6 +2617,11 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       voiceAsr: async request => ok(request, { text: 'fixture text' }),
       voiceTts: async request => ok(request, { mediaType: 'audio/mpeg', data: 'SUQz', durationMs: 800 }),
       sendVoiceMessage: async request => ok(request, { accepted: true as const }),
+      sendImageMessage: async request => ok(request, { accepted: true as const }),
+      image: async request => ok(request, {
+        image: { attachmentId: 'sha256:fixture' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
+        data: '',
+      }),
       updateQueue: request => err(request, {
         code: 'queue-item-not-found',
         message: 'fixture has no pending queue item',
@@ -3225,6 +3230,8 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'session.voiceAsr': return this.api.sessions.voiceAsr(request)
       case 'session.voiceTts': return this.api.sessions.voiceTts(request)
       case 'session.sendVoiceMessage': return this.api.sessions.sendVoiceMessage(request)
+      case 'session.sendImageMessage': return this.api.sessions.sendImageMessage(request)
+      case 'session.image': return this.api.sessions.image(request)
       case 'session.updateQueue': return this.api.sessions.updateQueue(request)
       case 'session.cancel': return this.api.sessions.cancel(request)
       case 'subagent.list': return this.api.subagents.list(request)

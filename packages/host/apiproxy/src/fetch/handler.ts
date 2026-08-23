@@ -32,6 +32,8 @@ import {
   sessionVoiceRequestSchema,
   sessionVoiceTtsRequestSchema,
   sessionSendVoiceMessageRequestSchema,
+  sessionSendImageMessageRequestSchema,
+  sessionImageRequestSchema,
 } from '../api/sessions.schema.ts'
 import {
   hostCreateDirectoryRequestSchema, hostDescribeRequestSchema,
@@ -107,6 +109,8 @@ const UNARY_ROUTES: UnaryRoutes = {
   'session.voiceAsr': { schema: sessionVoiceAsrRequestSchema, invoke: (api, r) => api.sessions.voiceAsr(r) },
   'session.voiceTts': { schema: sessionVoiceTtsRequestSchema, invoke: (api, r) => api.sessions.voiceTts(r) },
   'session.sendVoiceMessage': { schema: sessionSendVoiceMessageRequestSchema, invoke: (api, r) => api.sessions.sendVoiceMessage(r) },
+  'session.sendImageMessage': { schema: sessionSendImageMessageRequestSchema, invoke: (api, r) => api.sessions.sendImageMessage(r) },
+  'session.image': { schema: sessionImageRequestSchema, invoke: (api, r) => api.sessions.image(r) },
   'session.updateQueue': { schema: sessionUpdateQueueRequestSchema, invoke: (api, r) => api.sessions.updateQueue(r) },
   'session.cancel': { schema: sessionCancelRequestSchema, invoke: (api, r) => api.sessions.cancel(r) },
   'subagent.list': { schema: subagentListRequestSchema, invoke: (api, r, signal) => api.subagents.list(r, signal) },

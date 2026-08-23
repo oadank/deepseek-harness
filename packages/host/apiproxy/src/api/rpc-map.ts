@@ -37,6 +37,8 @@ export interface RpcMethodMap {
   'session.voiceAsr': SessionsApi['voiceAsr']
   'session.voiceTts': SessionsApi['voiceTts']
   'session.sendVoiceMessage': SessionsApi['sendVoiceMessage']
+  'session.sendImageMessage': SessionsApi['sendImageMessage']
+  'session.image': SessionsApi['image']
   'session.updateQueue': SessionsApi['updateQueue']
   'session.cancel': SessionsApi['cancel']
   'subagent.list': SubagentsApi['list']

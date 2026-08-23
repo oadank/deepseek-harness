@@ -418,6 +418,31 @@ export interface SessionsApi {
   }>): Promise<RpcResponse<{ accepted: true }>>
 
   /**
+   * [本地改造 2026-08-23] Send one image message into the session: the host
+   * persists the image file at `imagePath` as an `image/reply` event (an
+   * independent durable image row), so the agent can actively send an image
+   * to the user — mirroring sendVoiceMessage.
+   * @param request - session id and absolute local path of an image file.
+   * @returns accepted once the image/reply event is logged.
+   */
+  sendImageMessage(request: RpcRequest<{
+    sessionId: SessionId
+    imagePath: string
+    alt?: string
+  }>): Promise<RpcResponse<{ accepted: true }>>
+
+  /**
+   * [本地改造 2026-08-23] Read one stored image object (from an image/reply
+   * event) for the frontend, base64-encoded — mirroring session.voice.
+   * @param request - session id and the stored imageId.
+   * @returns the durable image reference and base64 data.
+   */
+  image(request: RpcRequest<{
+    sessionId: SessionId
+    attachmentId: string
+  }>): Promise<RpcResponse<{ image: ImageAttachmentRef; data: string }>>
+
+  /**
    * Edits, removes, or strictly steers one pending queued occurrence on an ordinary session.
    * Session-backed subagents reject with `agent-busy`.
    */
