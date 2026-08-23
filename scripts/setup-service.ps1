@@ -8,6 +8,9 @@
 #   ④ ffmpeg：自动探测 ffmpeg 路径并写入 DSH_VOICE_FFMPEG_BIN——语音识别(transcribeVoice)
 #      依赖它把浏览器 webm/ogg 录音转成 sherpa 能吃的 wav；不设会导致真实语音消息识别失败
 #      （设置页的识别「测试」因示例是预渲染 wav 所以能过，但真录音是 webm 必挂）
+#   ⑤ DSH_FORCE_BROWSE_PICKER=1：nssm 服务跑在 Session 0，原生 IFileOpenDialog 弹不出，
+#      强制目录选择走浏览器固定对话框（与 resolve.ts win32 默认回落 browse 形成双保险）
+#      ——否则「设置 → 工作区目录」选了毫无反应，用户无法选择工作区。
 #
 # 用法（管理员 PowerShell，在仓库根目录）：
 #   powershell -ExecutionPolicy Bypass -File scripts\setup-service.ps1
@@ -69,6 +72,10 @@ $ff = (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source
 if (-not $ff) { $ff = "ffmpeg" }   # 兜底走 PATH（服务进程继承系统 PATH）
 Write-Host "  ffmpeg:  $ff   （写入 DSH_VOICE_FFMPEG_BIN，语音识别转码用）" -ForegroundColor Green
 
+# ---- 2c. 目录选择器：强制 browse（nssm Session 0 下原生弹窗失效）----
+$PickerEnv = "DSH_FORCE_BROWSE_PICKER=1"
+Write-Host "  选择器:  $PickerEnv   （nssm Session 0 弹不出原生目录框，强制用浏览器 browse）" -ForegroundColor Green
+
 # ---- 3. 组装启动参数 ----
 $binEntry = "--import tsx/esm apps/cli/src/bin.ts web --no-open --port $Port --host 127.0.0.1"
 if ($TrustedHosts -ne "") {
@@ -86,7 +93,7 @@ $ErrorActionPreference = "Continue"
 $ErrorActionPreference = $prevEAP
 & $nssm.Source install $ServiceName "$nodeExe" "$binEntry" | Out-Null
 & $nssm.Source set $ServiceName AppDirectory "$RepoRoot" | Out-Null
-& $nssm.Source set $ServiceName AppEnvironmentExtra "DSH_HOME=$DshHome" "DSH_VOICE_FFMPEG_BIN=$ff" | Out-Null
+& $nssm.Source set $ServiceName AppEnvironmentExtra "DSH_HOME=$DshHome" "DSH_VOICE_FFMPEG_BIN=$ff" $PickerEnv | Out-Null
 & $nssm.Source set $ServiceName Start SERVICE_AUTO_START | Out-Null
 New-Item -ItemType Directory -Force -Path "$RepoRoot\logs" | Out-Null
 & $nssm.Source set $ServiceName AppStdout "$RepoRoot\logs\$ServiceName.out.log" | Out-Null

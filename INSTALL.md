@@ -62,7 +62,7 @@ node --import tsx/esm apps/cli/src/bin.ts web --no-open --port 3080
 powershell -ExecutionPolicy Bypass -File scripts\setup-service.ps1
 ```
 
-脚本自动完成：查 node 真实路径 → 设 DSH_HOME 为你的数据目录 → 配日志 → 注册并启动服务。
+脚本自动完成：查 node 真实路径 → 设 DSH_HOME 为你的数据目录 → 自动加 DSH_FORCE_BROWSE_PICKER=1（目录选择走网页树，session 0 下原生弹窗失效的坑自动规避）→ 配日志 → 注册并启动服务。
 远程访问时加参数：`-TrustedHosts "你的域名.ts.net,你的IP"`。
 
 ### 手动方式（了解原理用）
@@ -81,7 +81,11 @@ nssm set dsh-web AppDirectory "<源码目录>\deepseek-harness"
 # 4) ⚠️ 关键一步：让服务使用【你自己的】dsh 数据目录。
 #    服务默认以 LocalSystem 运行，会去读系统账户的目录，找不到你的插件和配置——
 #    不设这一行，语音设置页就是空的。把 <你的用户名> 替换成你的 Windows 用户名：
-nssm set dsh-web AppEnvironmentExtra "DSH_HOME=C:\Users\<你的用户名>\.dsh"
+nssm set dsh-web AppEnvironmentExtra "DSH_HOME=C:\Users\<你的用户名>\.dsh" "DSH_FORCE_BROWSE_PICKER=1"
+
+#    ⚠️ DSH_FORCE_BROWSE_PICKER=1 必设：nssm 服务跑在 session 0，原生目录选择框弹不出来，
+#    "添加工作区"点了没反应（亲测的坑）。设了之后强制用网页目录树（browse），设置 → 工作区目录 才点得动。
+#    手动命令直接跑（非服务）则不需要——源码已默认 Windows 走 browse。
 
 # 5) 日志（方便排查）：
 nssm set dsh-web AppStdout "<源码目录>\logs\dsh-web.out.log"
