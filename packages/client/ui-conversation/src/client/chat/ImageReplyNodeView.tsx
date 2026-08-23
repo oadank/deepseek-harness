@@ -12,7 +12,7 @@ export const ImageReplyNodeView = memo(function ImageReplyNodeView({
   const { image } = node.data
   return (
     <div data-image-reply>
-      {renderMessageImages({ images: [{ attachment: image }], align: 'end' })}
+      {renderMessageImages({ images: [{ attachment: image }], align: 'start' })}
     </div>
   )
 })
