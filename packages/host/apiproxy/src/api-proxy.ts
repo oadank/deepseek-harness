@@ -194,6 +194,69 @@ async function readDeepSeekBalance(ctx: Context): Promise<BalanceView | null> {
   }
 }
 
+/** GW 直连余额缓存（5 秒过期，与 DeepSeek 直连一致：仅防抖重复轮询，不后台刷新）。 */
+let gwBalanceCache: { value: BalanceView | null; cachedAt: number } | null = null
+
+/**
+ * 查询 henry-gao GW 直连账户余额（按量计费）。读取 GW_API_KEY 凭证
+ * （dsh-web 直连 gw provider 的 key），调网关 GET /v1/balance；无凭证、
+ * 非直连部署或查询失败一律返回 null（余额只是辅助指示，绝不让 UI 报错）。
+ *
+ * 网关返回 `{ balance_cny, available_balance_cny, spent_cny, used_tokens,
+ * quota_tokens }`，与官方 balance_infos（…/user/balance）形状不同：gw 是
+ * 按量余额（充值预付款），无「赠送/充值」之分，故 granted/toppedUp 统一
+ * 填 available_balance_cny / "0"（前端只看 total 为主）。
+ * @param ctx - host context（读 credentials 可选服务）。
+ * @returns 余额视图；不可用时为 null。
+ */
+async function readGwBalance(ctx: Context): Promise<BalanceView | null> {
+  const now = Date.now()
+  if (gwBalanceCache !== null && now - gwBalanceCache.cachedAt < 5_000) {
+    return gwBalanceCache.value
+  }
+  let apiKey: string | undefined
+  const credentials = ctx.get('credentials')
+  if (credentials !== undefined) {
+    const hit = await credentials.resolve(credentialRef('GW_API_KEY'))
+    apiKey = hit?.value
+  } else {
+    apiKey = process.env.GW_API_KEY
+  }
+  if (apiKey === undefined || apiKey.length === 0) {
+    gwBalanceCache = { value: null, cachedAt: now }
+    return null
+  }
+  try {
+    const response = await fetch('https://gateway.henry-gao.com/v1/balance', {
+      headers: { authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) {
+      gwBalanceCache = { value: null, cachedAt: now }
+      return null
+    }
+    const data = await response.json() as {
+      balance_cny?: string
+      available_balance_cny?: string
+    }
+    if (data.balance_cny === undefined) {
+      gwBalanceCache = { value: null, cachedAt: now }
+      return null
+    }
+    const value: BalanceView = {
+      currency: 'CNY',
+      total: data.balance_cny,
+      granted: data.available_balance_cny ?? data.balance_cny,
+      toppedUp: '0',
+    }
+    gwBalanceCache = { value, cachedAt: now }
+    return value
+  } catch {
+    // 网络抖动/超时：保留旧缓存值（若有），否则 null——绝不把失败抛给 UI。
+    return gwBalanceCache?.value ?? null
+  }
+}
+
 /** Validate one prompt as a batch before publishing any durable image object. */
 async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
   if (content.every(part => part.type === 'text')) {
@@ -3758,13 +3821,18 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     balance: {
       async get(request) {
         // [本地改造 2026-08-16] 余额指示只对 deepseek 直连模型显示：
-        // 调用方带上 sessionId 时，检查该会话当前 provider；非
-        // deepseek-official（如 qwen 百炼）直接返回 null，前端据此隐藏。
+        // 调用方带上 sessionId 时，检查该会话当前 provider；非直连模型
+        // （如 qwen 百炼）直接返回 null，前端据此隐藏。
+        // [本地改造 2026-08-25] 新增 gw 直连分流：provider 为 gw 时查 GW
+        // 网关（henry-gao）余额，deepseek-official 时查官方余额，其余 null。
         const { sessionId } = request.payload
         if (sessionId !== undefined) {
           const found = await agentFor(sessionId)
           if (!('error' in found)) {
             const current = selectionFor(found.agent).current
+            if (current.provider === 'gw') {
+              return ok(request, { balance: await readGwBalance(ctx) })
+            }
             if (current.provider !== 'deepseek-official') {
               return ok(request, { balance: null })
             }
