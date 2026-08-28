@@ -190,6 +190,10 @@ function requestHeaders(headers: Readonly<Record<string, string>> | undefined): 
  * restart; model descriptors come from the collection those profiles built.
  */
 export class PiAiAdapter extends LlmAdapter {
+  // [本地改造 2026-08-28] 文本模型（如 gw 下 qwen-token-plan-cn 等）非视觉模型
+  // 在 context.toPiContext 里把图转本地路径文本，需跳过顶层 sha 摘要投影。
+  override readonly textImageHandling = 'path' as const
+
   private snapshot: PiAiSnapshot | undefined
 
   constructor(private readonly config: PiAiAdapterOptions) {

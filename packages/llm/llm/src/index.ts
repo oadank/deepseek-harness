@@ -205,6 +205,17 @@ export interface PreparedAdapterCall {
  */
 export abstract class LlmAdapter {
   /**
+   * How this adapter handles images when the target model only accepts text.
+   * - `'offload'` (default): the harness's top-level text-model projection runs
+   *   and replaces image blocks with an `[image omitted … sha256:…]` placeholder.
+   * - `'path'`: this adapter converts image blocks to local-attachment-path text
+   *   itself (serialize -> imagesAsText), so the top-level projection is skipped
+   *   and the model receives a usable path to hand to a vision tool.
+   * [本地改造 2026-08-28] deepseek/pi-ai 声明 `'path'` 保住本地路径文本能力；其余保持官方占位。
+   */
+  readonly textImageHandling: 'offload' | 'path' = 'offload'
+
+  /**
    * Describe one provider route owned by this adapter.
    * @param provider - a route passed to `registerAdapter()` for this instance.
    * @returns detached display metadata whose id must equal `provider`.
@@ -945,6 +956,10 @@ export class LlmRuntime extends Service {
       const projectedOptions = modelInfo.inputModalities !== undefined
         && !modelInfo.inputModalities.includes('image')
         && resolvedOptions.messages.some(message => contentHasImage(message.content))
+        // [本地改造 2026-08-28] 声明 textImageHandling==='path' 的 adapter（deepseek/pi-ai）
+        // 自己在 serialize 里把图转本地路径文本，跳过官方 sha 摘要投影，否则图在 adapter
+        // dispatch 前就被换成占位文本、本地路径能力被架空。
+        && adapter.textImageHandling !== 'path'
         ? Object.isFrozen(resolvedOptions)
           ? deepFreeze({ ...resolvedOptions, messages: projectImagesForTextModel(resolvedOptions.messages) as Message[] })
           : { ...resolvedOptions, messages: projectImagesForTextModel(resolvedOptions.messages) as Message[] }

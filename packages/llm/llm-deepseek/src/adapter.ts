@@ -352,6 +352,10 @@ export function httpErrorCode(status: number, error?: WireError['error']): strin
  * map to `ABORTED`; the configured per-read idle watchdog maps to `TIMEOUT`.
  */
 export class DeepSeekAdapter extends LlmAdapter {
+  // [本地改造 2026-08-28] 文本模型发图转本地路径文本（serialize imagesAsText），
+  // 需跳过 llm/index 的顶层 sha 摘要投影，否则图在 dispatch 前被替换、路径能力被架空。
+  override readonly textImageHandling = 'path' as const
+
   private readonly files: DeepSeekFileStore
 
   constructor(private readonly config: DeepSeekAdapterOptions) {

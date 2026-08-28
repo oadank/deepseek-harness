@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createUserMessage, LlmError, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
-import type { RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
+import type { BackoffConfig, NormalRetryPolicyConfig, PerCodeRetryConfig, RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -78,16 +78,17 @@ async function harness(adapter: ScriptedAdapter, policy: RetryPolicyConfig): Pro
 
 function normalConfig(overrides: Record<string, unknown> = {}): RetryPolicyConfig {
   const { backoff, codes, ...rest } = overrides as {
-    backoff?: Record<string, unknown>
-    codes?: Record<string, unknown>
+    backoff?: BackoffConfig
+    codes?: Record<string, PerCodeRetryConfig>
+    maxRetries?: number
   }
-  return {
+  const base: NormalRetryPolicyConfig = {
     mode: 'normal',
     maxRetries: 5,
     ...rest,
     backoff: { initialDelayMs: 500, maxDelayMs: 10_000, jitterRatio: 0, ...backoff },
-    ...codes === undefined ? {} : { codes },
   }
+  return codes === undefined ? base : { ...base, codes }
 }
 
 let context: Context | undefined
@@ -124,7 +125,8 @@ describe('per-code TRANSPORT retry policy', () => {
     const retries = agent.session.events.filter(e => e.type === 'llm/retry')
     expect(retries).toHaveLength(8)
     for (const r of retries) {
-      expect(r.data.maxRetries).toBe(8)
+      // TRANSPORT per-code 走 normal 分支，maxRetries 在该联合分支上
+      expect('maxRetries' in r.data ? r.data.maxRetries : 0).toBe(8)
       expect(r.data.failure.code).toBe('TRANSPORT')
     }
   }, 20_000)
@@ -151,8 +153,10 @@ describe('per-code TRANSPORT retry policy', () => {
 
     const retry = agent.session.events.find(e => e.type === 'llm/retry')
     expect(retry).toBeDefined()
+    if (retry === undefined) throw new Error('expected an llm/retry event')
     const details = retry.data.failure.details as Record<string, unknown> | undefined
     expect(details).toBeDefined()
+    if (details === undefined) throw new Error('expected failure.details')
     // LlmError 的 details 从构造时的 cause 链提取：第一层即底层 undici 错误
     expect(details.code).toBe('ECONNRESET')
     expect(details.syscall).toBe('read')
