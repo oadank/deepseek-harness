@@ -15,6 +15,7 @@
   inset: 0;
   background: var(--dsw-alias-bg-mask-1);
   backdrop-filter: var(--dsw-mask-blur);
+  cursor: zoom-out;
 }
 
 .image {
@@ -25,6 +26,7 @@
   border-radius: 12px;
   background: var(--dsw-specific-input-major);
   box-shadow: var(--dsw-shadow-lv3);
+  cursor: zoom-out;
 }
 
 .close {

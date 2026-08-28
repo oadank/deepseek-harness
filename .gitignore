@@ -46,3 +46,6 @@ Usersoadan.dshdsh-botsessions/
 # 内置插件的 lib 是源码（非构建产物），必须入库
 !internal-plugins/dsh-input-tools/lib/
 !internal-plugins/dsh-input-tools/lib/*
+
+# 本机改动备份，绝不推送
+*.bak-*

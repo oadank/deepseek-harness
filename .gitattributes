@@ -6,6 +6,10 @@
 # in-repo form stays LF; CRLF becomes checkout-time presentation only.
 * text=auto eol=lf
 
+# [2026-08-23] PowerShell 5.1 按 ANSI/GBK 读无 BOM 的 .ps1 → 中文乱码 ParseError。
+# .ps1 必须保留 UTF-8 BOM。git 默认不会剥离 BOM，显式声明防止 eol 重写对它做手脚。
+*.ps1 text eol=lf
+
 *.pdf binary
 
 # Pairing records are generated from the three confirmed owner-blob pairs.

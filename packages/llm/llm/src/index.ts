@@ -28,6 +28,7 @@ import { callConfigEquals, deepFreeze } from './call-config.ts'
 import type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
 import { HarnessError, INVALID_CREDENTIAL_CODE } from './error.ts'
 import { normalizeLlmFailure } from './adapter-failure.ts'
+import { transportErrorDetails } from './error-details.ts'
 import { normalizeApiKey } from './api-key.ts'
 import { contentHasImage, projectImagesForTextModel } from './content.ts'
 
@@ -40,6 +41,15 @@ export * from './types.ts'
 export * from './content.ts'
 export * from './message.ts'
 export * from './retry-policy.ts'
+export { transportErrorDetails } from './error-details.ts'
+export {
+  installResilientFetch,
+  latestTransportErrorDetails,
+  resetDispatcher,
+  shouldResetConnection,
+  ensureDispatcher,
+  CONNECTION_RESET_CODES,
+} from './transport.ts'
 export { BlockAssembler } from './assembler.ts'
 export { callConfigEquals, deepFreeze, isAgentLoopRequest, markAgentLoopRequest } from './call-config.ts'
 export type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
@@ -107,12 +117,17 @@ export class LlmError extends HarnessError {
     }
     super(message, code, options)
     this.name = 'LlmError'
+    // [本地补丁 2026-08-27 传输诊断] 从 cause 链递归提取底层传输错误细节
+    // （ECONNRESET/ENOTFOUND/ETIMEDOUT/TLS 等），随 failure.details 进入
+    // llm/retry 会话事件，便于离线定位网络故障层。仅白名单字段，无密钥/正文。
+    const details = options?.cause instanceof Error ? transportErrorDetails(options.cause) : {}
     this.failure = Object.freeze({
       message,
       code,
       ...options?.status === undefined ? {} : { status: options.status },
       ...options?.providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs: options.providerRetryAfterMs },
       ...options?.requestId === undefined ? {} : { requestId: options.requestId },
+      ...Object.keys(details).length > 0 ? { details } : {},
     })
   }
 }

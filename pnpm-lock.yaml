@@ -5475,6 +5475,9 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: link:../../../vendor/schemastery
         version: link:../../../vendor/schemastery
+      undici:
+        specifier: ^7.8.0
+        version: 7.28.0
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^

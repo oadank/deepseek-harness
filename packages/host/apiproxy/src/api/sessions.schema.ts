@@ -399,6 +399,30 @@ export const sessionSendVoiceMessageValueSchema = z.object({
   accepted: z.literal(true),
 }) satisfies z.ZodType<Wire<ResponseValue<'session.sendVoiceMessage'>>>
 
+/** session.sendImageMessage request payload. */
+export const sessionSendImageMessageRequestSchema = z.object({
+  sessionId: sessionIdSchema,
+  imagePath: z.string().min(1),
+  alt: z.string().optional(),
+}) satisfies z.ZodType<Wire<RequestPayload<'session.sendImageMessage'>>>
+
+/** session.sendImageMessage response value. */
+export const sessionSendImageMessageValueSchema = z.object({
+  accepted: z.literal(true),
+}) satisfies z.ZodType<Wire<ResponseValue<'session.sendImageMessage'>>>
+
+/** session.image request payload. */
+export const sessionImageRequestSchema = z.object({
+  sessionId: sessionIdSchema,
+  attachmentId: z.string().min(1),
+}) satisfies z.ZodType<Wire<RequestPayload<'session.image'>>>
+
+/** session.image response value. */
+export const sessionImageValueSchema = z.object({
+  image: imageAttachmentRefSchema,
+  data: z.string(),
+}) satisfies z.ZodType<Wire<ResponseValue<'session.image'>>>
+
 /** session.updateQueue request payload. */
 export const sessionUpdateQueueRequestSchema = z.object({
   sessionId: sessionIdSchema,

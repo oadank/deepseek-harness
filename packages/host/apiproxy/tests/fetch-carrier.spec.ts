@@ -117,6 +117,12 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       async sendVoiceMessage(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { accepted: true as const } } }
       },
+      async sendImageMessage(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { accepted: true as const } } }
+      },
+      async image(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { image: { attachmentId: 'a' as never, mediaType: 'image/png' as const, bytes: 1, width: 1, height: 1 }, data: 'AA==' } } }
+      },
       async updateQueue(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { accepted: true as const } } }
       },
@@ -299,7 +305,7 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
     },
     balance: {
       async get(request) {
-        return { rpcId: request.rpcId, result: { ok: true, value: { balance: null } } }
+        return { rpcId: request.rpcId, result: { ok: true, value: { balance: null, gatewayHealthy: null, usage: null } } }
       },
     },
     events: {

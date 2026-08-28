@@ -48,6 +48,14 @@ export interface LlmFailure {
   readonly providerRetryAfterMs?: number
   /** Opaque provider-issued request identifier for diagnostics. */
   readonly requestId?: ProviderRequestId
+  /**
+   * Flat, JSON-safe cause-chain snapshot from {@link LlmError} construction
+   * (or the transport capture layer for SDKs that flatten the chain away),
+   * e.g. `{ code: 'ECONNRESET', errno: -104, 'cause1.code': 'UND_ERR_SOCKET' }`.
+   * Diagnostic-only: carries transport fields (code/errno/syscall/hostname/
+   * address/port) and never API keys, request bodies, or user prompts.
+   */
+  readonly details?: Readonly<Record<string, unknown>>
 }
 
 /** Plain text visible to the end user. */

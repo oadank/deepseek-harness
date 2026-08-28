@@ -67,6 +67,8 @@ function scriptedApi(overrides: {
       voiceAsr: r => ok(r, { text: 'stub transcription' }),
       voiceTts: r => ok(r, { mediaType: 'audio/mpeg', data: 'SUQz', durationMs: 800 }),
       sendVoiceMessage: r => ok(r, { accepted: true as const }),
+      sendImageMessage: r => ok(r, { accepted: true as const }),
+      image: r => ok(r, { image: { attachmentId: 'a' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 }, data: 'AA==' }),
       updateQueue: r => ok(r, { accepted: true as const }),
       cancel: r => ok(r, { accepted: true as const }),
       ...overrides.sessions,
@@ -137,7 +139,7 @@ function scriptedApi(overrides: {
       ...overrides.llm,
     },
     balance: {
-      get: r => ok(r, { balance: null }),
+      get: r => ok(r, { balance: null, gatewayHealthy: null, usage: null }),
     },
     events: { mux: () => empty<MuxFrame>(), host: () => empty<HostFrame>(), ...overrides.events },
     respond: overrides.respond ?? (() => Promise.resolve({ accepted: false as const, reason: 'not-pending' as const })),

@@ -3,8 +3,8 @@
  * narrow RpcRequest<P> and echoes request.rpcId on the RpcResponse<T>.
  */
 
-import { randomUUID } from 'node:crypto'
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
+import { mkdir, rm, stat, writeFile, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { z as zod } from 'zod'
@@ -13,7 +13,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentId, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
@@ -37,7 +37,7 @@ import {
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {
-  ApiProxy, BalanceView, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
+  ApiProxy, ArkUsageView, BalanceView, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
   ModelCatalogFailure, ModelProviderGroup,
   ModelReasoning, MuxFrame, PromptContentPart, QuestionResponsePayload, SessionListMetadata, SessionProjectionsBlock, SessionSearchItem,
   QueuedInboxItem, SessionSummary, SettingsNamespaceView, SubagentAddress, JobView, ToolEventView,
@@ -53,6 +53,7 @@ import {
   type SessionLogCompressionLevel,
 } from './session-export.ts'
 import { readVoiceFile, saveVoiceFile, synthesizeReplyVoice, transcribeVoice, voiceObjectPath, voiceStorageRoot } from './voice.ts'
+import { readImageFile, saveImageFile, imageStorageRoot } from './image.ts'
 import type { VoiceAttachmentRef } from './api/sessions.ts'
 import type { SessionRawArtifact } from '@deepseek-ai/dsh-session-persistence'
 import {
@@ -194,6 +195,221 @@ async function readDeepSeekBalance(ctx: Context): Promise<BalanceView | null> {
   }
 }
 
+/** GW 直连余额缓存（5 秒过期，与 DeepSeek 直连一致：仅防抖重复轮询，不后台刷新）。 */
+let gwBalanceCache: { value: BalanceView | null; cachedAt: number } | null = null
+
+/**
+ * 查询 henry-gao GW 直连账户余额（按量计费）。读取 GW_API_KEY 凭证
+ * （dsh-web 直连 gw provider 的 key），调网关 GET /v1/balance；无凭证、
+ * 非直连部署或查询失败一律返回 null（余额只是辅助指示，绝不让 UI 报错）。
+ *
+ * 网关返回 `{ balance_cny, available_balance_cny, spent_cny, used_tokens,
+ * quota_tokens }`，与官方 balance_infos（…/user/balance）形状不同：gw 是
+ * 按量余额（充值预付款），无「赠送/充值」之分，故 granted/toppedUp 统一
+ * 填 available_balance_cny / "0"（前端只看 total 为主）。
+ * @param ctx - host context（读 credentials 可选服务）。
+ * @returns 余额视图；不可用时为 null。
+ */
+async function readGwBalance(ctx: Context): Promise<BalanceView | null> {
+  const now = Date.now()
+  if (gwBalanceCache !== null && now - gwBalanceCache.cachedAt < 5_000) {
+    return gwBalanceCache.value
+  }
+  let apiKey: string | undefined
+  const credentials = ctx.get('credentials')
+  if (credentials !== undefined) {
+    const hit = await credentials.resolve(credentialRef('GW_API_KEY'))
+    apiKey = hit?.value
+  } else {
+    apiKey = process.env.GW_API_KEY
+  }
+  if (apiKey === undefined || apiKey.length === 0) {
+    gwBalanceCache = { value: null, cachedAt: now }
+    return null
+  }
+  try {
+    const response = await fetch('https://gateway.henry-gao.com/v1/balance', {
+      headers: { authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) {
+      gwBalanceCache = { value: null, cachedAt: now }
+      return null
+    }
+    const data = await response.json() as {
+      balance_cny?: string
+      available_balance_cny?: string
+    }
+    if (data.balance_cny === undefined) {
+      gwBalanceCache = { value: null, cachedAt: now }
+      return null
+    }
+    const value: BalanceView = {
+      currency: 'CNY',
+      total: data.balance_cny,
+      granted: data.available_balance_cny ?? data.balance_cny,
+      toppedUp: '0',
+    }
+    gwBalanceCache = { value, cachedAt: now }
+    return value
+  } catch {
+    // 网络抖动/超时：保留旧缓存值（若有），否则 null——绝不把失败抛给 UI。
+    return gwBalanceCache?.value ?? null
+  }
+}
+
+/**
+ * ARK Agent Plan 套餐配额缓存（60 秒过期：套餐配额非实时变化，且 V4 签名请求较重，
+ * 缓存周期比余额长）。与余额/健康缓存同一容错哲学：失败返回 null，绝不抛给 UI。
+ */
+let arkUsageCache: { value: ArkUsageView | null; cachedAt: number } | null = null
+
+/** 火山方舟 OpenAPI（用量/配额查询）公网网关常量。 */
+const ARK_OPENAPI_HOST = 'ark.cn-beijing.volcengineapi.com'
+const ARK_OPENAPI_REGION = 'cn-beijing'
+const ARK_OPENAPI_SERVICE = 'ark'
+
+/**
+ * 查询火山方舟（volc-ark）Agent Plan 套餐配额快照。读取 VOLC_ACCESS_KEY_ID /
+ * VOLC_SECRET_ACCESS_KEY 凭证（火山控制台「密钥管理」创建），用 Volcengine V4
+ * 签名调 GetAFPUsage OpenAPI：query 带 Action/Version，业务参数为空 body，签名
+ * seed 为 SecretAccessKey 本身（无前缀）。返回 5h / 周 / 月 三个周期的已用配额，
+ * 供前端算"各用了几成"。无凭证、非套餐订阅或查询失败一律返回 null。
+ * [本地改造 2026-08-27] 火山套餐配额非按量余额，故单独走本函数返回 ArkUsageView。
+ * @param ctx - host context（读 credentials 可选服务）。
+ * @returns ARK 套餐配额视图；不可用时为 null。
+ */
+async function readArkUsage(ctx: Context): Promise<ArkUsageView | null> {
+  const now = Date.now()
+  if (arkUsageCache !== null && now - arkUsageCache.cachedAt < 60_000) {
+    return arkUsageCache.value
+  }
+  const credentials = ctx.get('credentials')
+  const resolveCred = async (ref: string): Promise<string | undefined> => {
+    if (credentials !== undefined) {
+      const hit = await credentials.resolve(credentialRef(ref))
+      return hit?.value
+    }
+    return process.env[ref]
+  }
+  const accessKeyId = await resolveCred('VOLC_ACCESS_KEY_ID')
+  const secretAccessKey = await resolveCred('VOLC_SECRET_ACCESS_KEY')
+  if (accessKeyId === undefined || accessKeyId.length === 0 || secretAccessKey === undefined || secretAccessKey.length === 0) {
+    arkUsageCache = { value: null, cachedAt: now }
+    return null
+  }
+  try {
+    const xdate = new Date().toISOString()
+      .replace(/\.\d{3}Z$/, 'Z')
+      .replace(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z/, '$1$2$3T$4$5$6Z')
+    const query = 'Action=GetAFPUsage&Version=2024-01-01'
+    const body = '{}'
+    const payloadHash = createHash('sha256').update(body, 'utf8').digest('hex')
+    const signedHeaders = ['host', 'x-content-sha256', 'x-date']
+    const canonicalHeaders = [
+      `host:${ARK_OPENAPI_HOST}\n`,
+      `x-content-sha256:${payloadHash}\n`,
+      `x-date:${xdate}\n`,
+    ].sort().join('')
+    const canonicalRequest = ['POST', '/', query, canonicalHeaders, signedHeaders.join(';'), payloadHash].join('\n')
+    const scope = `${xdate.slice(0, 8)}/${ARK_OPENAPI_REGION}/${ARK_OPENAPI_SERVICE}/request`
+    const stringToSign = [
+      'HMAC-SHA256',
+      xdate,
+      scope,
+      createHash('sha256').update(canonicalRequest, 'utf8').digest('hex'),
+    ].join('\n')
+    const kDate = createHmac('sha256', secretAccessKey).update(xdate.slice(0, 8), 'utf8').digest()
+    const kRegion = createHmac('sha256', kDate).update(ARK_OPENAPI_REGION, 'utf8').digest()
+    const kService = createHmac('sha256', kRegion).update(ARK_OPENAPI_SERVICE, 'utf8').digest()
+    const kSigning = createHmac('sha256', kService).update('request', 'utf8').digest()
+    const signature = createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex')
+    const authorization =
+      `HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders.join(';')}, Signature=${signature}`
+
+    const response = await fetch(`https://${ARK_OPENAPI_HOST}/?${query}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-date': xdate,
+        'x-content-sha256': payloadHash,
+        Authorization: authorization,
+      },
+      body,
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) {
+      arkUsageCache = { value: null, cachedAt: now }
+      return null
+    }
+    const data = await response.json() as {
+      Result?: {
+        PlanType?: string
+        AFPFiveHour?: { Quota: number; Used: number; ResetTime: number }
+        AFPWeekly?: { Quota: number; Used: number; ResetTime: number }
+        AFPMonthly?: { Quota: number; Used: number; ResetTime: number }
+      }
+    }
+    const result = data.Result
+    if (result === undefined) {
+      arkUsageCache = { value: null, cachedAt: now }
+      return null
+    }
+    const periodView = (label: string, p?: { Quota: number; Used: number; ResetTime: number }) =>
+      p === undefined
+        ? null
+        : { label, quota: Number(p.Quota), used: Number(p.Used), resetAt: Number(p.ResetTime) ?? 0 }
+    const periods = [
+      periodView('5h', result.AFPFiveHour),
+      periodView('weekly', result.AFPWeekly),
+      periodView('monthly', result.AFPMonthly),
+    ].filter((p): p is NonNullable<typeof p> => p !== null)
+    if (periods.length === 0) {
+      arkUsageCache = { value: null, cachedAt: now }
+      return null
+    }
+    const value: ArkUsageView = { planType: result.PlanType ?? '', periods }
+    arkUsageCache = { value, cachedAt: now }
+    return value
+  } catch {
+    // 网络抖动/超时：保留旧缓存值（若有），否则 null——绝不把失败抛给 UI。
+    return arkUsageCache?.value ?? null
+  }
+}
+
+/** GW 网关健康缓存（5 秒过期，与余额一致：仅防抖重复探测，不后台刷新）。 */
+let gwHealthCache: { value: boolean | null; cachedAt: number } | null = null
+
+/**
+ * 探测 henry-gao GW 网关健康状况。调网关公开的 GET /health（状态页自身使用的
+ * 健康接口，无需凭证）：返回 JSON 且 `ready: true` 视为正常，HTTP 非 200 或
+ * 请求失败/超时视为异常。浏览器直连会被 CORS 拦截，故必须由服务端代查。
+ * 非 gw 直连场景不调用本函数（由 balance.get 分流决定）。
+ * @returns true=正常、false=异常；探测无法判定时为 null（保留旧缓存值若有）。
+ */
+async function readGwHealth(): Promise<boolean | null> {
+  const now = Date.now()
+  if (gwHealthCache !== null && now - gwHealthCache.cachedAt < 5_000) {
+    return gwHealthCache.value
+  }
+  try {
+    const response = await fetch('https://gateway.henry-gao.com/health', {
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) {
+      gwHealthCache = { value: false, cachedAt: now }
+      return false
+    }
+    const data = await response.json() as { ready?: boolean }
+    const value = data.ready === true
+    gwHealthCache = { value, cachedAt: now }
+    return value
+  } catch {
+    // 网络抖动/超时：保留旧缓存值（若有），否则 null——绝不把失败抛给 UI。
+    return gwHealthCache?.value ?? null
+  }
+}
+
 /** Validate one prompt as a batch before publishing any durable image object. */
 async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
   if (content.every(part => part.type === 'text')) {
@@ -291,6 +507,24 @@ function imageBlockIn(content: unknown, match: (ref: ImageAttachmentRef) => bool
 
 /** Search every durable event carrier that can own model-visible content. */
 function imageInEvent(event: SessionEvent, match: (ref: ImageAttachmentRef) => boolean): ImageAttachmentRef | undefined {
+  // [本地改造 2026-08-23] 助手图片回复事件：payload 直接携带 attachmentId（非 image 块）。
+  if (event.type === 'image/reply') {
+    const { attachmentId, mediaType, bytes, width, height } = event.data as {
+      attachmentId: string
+      mediaType: string
+      bytes: number
+      width: number
+      height: number
+    }
+    const ref: ImageAttachmentRef = {
+      attachmentId: attachmentId as AttachmentId,
+      mediaType: mediaType as ImageAttachmentRef['mediaType'],
+      bytes,
+      width: width ?? 1,
+      height: height ?? 1,
+    }
+    return match(ref) ? ref : undefined
+  }
   const data = event.data as {
     content?: unknown
     message?: { content?: unknown }
@@ -386,6 +620,18 @@ function referencedImage(events: readonly SessionEvent[], attachmentId: string):
     if (found !== undefined) return found
   }
   return undefined
+}
+
+/** Map a file extension to a supported image media type (for sendImageMessage). */
+function sniffImageMediaType(path: string): ImageAttachmentRef['mediaType'] | undefined {
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  switch (ext) {
+    case 'png': return 'image/png'
+    case 'jpg': case 'jpeg': return 'image/jpeg'
+    case 'gif': return 'image/gif'
+    case 'webp': return 'image/webp'
+    default: return undefined
+  }
 }
 
 /** Strict browser-zone profile: UTC or an IANA Area/Location-style identifier. */
@@ -2796,6 +3042,76 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         }
       },
 
+      async sendImageMessage(request) {
+        // [本地改造 2026-08-23] 主动发图片消息：读本地图片文件 → 落盘附件存储 → 追加 image/reply
+        const { sessionId, imagePath } = request.payload
+        try {
+          const mediaType = sniffImageMediaType(imagePath)
+          if (mediaType === undefined) {
+            return err(request, {
+              code: 'internal',
+              message: 'unsupported image type (png/jpg/gif/webp/bmp expected)',
+              details: {},
+            })
+          }
+          const data = new Uint8Array(await readFile(imagePath))
+          const attachment = await saveImageFile(imageStorageRoot(), data, mediaType)
+          const agent = ctx.agents.get(sessionId)
+          if (agent === undefined || agent.session.id !== sessionId) {
+            return err(request, {
+              code: 'session-not-found',
+              message: 'no attached session for sendImageMessage',
+              details: { sessionId },
+            })
+          }
+          const turn = agent.session.events
+            .filter((event): event is SessionEvent & { type: 'turn/start' } => event.type === 'turn/start')
+            .at(-1)?.data.turn ?? 0
+          agent.session.append('image/reply', {
+            turn,
+            attachmentId: attachment.attachmentId,
+            mediaType: attachment.mediaType,
+            bytes: attachment.bytes,
+            width: attachment.width,
+            height: attachment.height,
+          })
+          return ok(request, { accepted: true as const })
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'internal',
+            message: `sendImageMessage failed: ${String(error)}`,
+            details: {},
+          })
+        }
+      },
+
+      async image(request) {
+        // [本地改造 2026-08-23] 读取 image/reply 存储的图片对象（base64），供前端渲染/放大。
+        const { sessionId, attachmentId } = request.payload
+        try {
+          const state = await readSessionState(sessionId)
+          const ref = referencedImage(state.events, attachmentId)
+          if (ref === undefined) {
+            return err(request, {
+              code: 'attachment-error',
+              message: 'Image object is not referenced by this session.',
+              details: { reason: 'IMAGE_NOT_REFERENCED' },
+            })
+          }
+          const stored = await readImageFile(imageStorageRoot(), ref)
+          return ok(request, {
+            image: stored.ref,
+            data: Buffer.from(stored.data).toString('base64'),
+          })
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'internal',
+            message: `Unable to read image object: ${String(error)}`,
+            details: {},
+          })
+        }
+      },
+
       updateQueue(request) {
         const { sessionId, itemId, action } = request.payload
         if (action.kind === 'edit' && action.content.some(block => block.type !== 'text')) {
@@ -3658,19 +3974,39 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     balance: {
       async get(request) {
         // [本地改造 2026-08-16] 余额指示只对 deepseek 直连模型显示：
-        // 调用方带上 sessionId 时，检查该会话当前 provider；非
-        // deepseek-official（如 qwen 百炼）直接返回 null，前端据此隐藏。
+        // 调用方带上 sessionId 时，检查该会话当前 provider；非直连模型
+        // （如 qwen 百炼）直接返回 null，前端据此隐藏。
+        // [本地改造 2026-08-25] 新增 gw 直连分流：provider 为 gw 时查 GW
+        // 网关（henry-gao）余额，deepseek-official 时查官方余额，其余 null。
         const { sessionId } = request.payload
         if (sessionId !== undefined) {
           const found = await agentFor(sessionId)
           if (!('error' in found)) {
             const current = selectionFor(found.agent).current
+            if (current.provider === 'gw') {
+              return ok(request, {
+                balance: await readGwBalance(ctx),
+                // [本地改造 2026-08-27] gw 网关健康状态：真实探测 /health（true=正常/绿、false=异常/红）。
+                gatewayHealthy: await readGwHealth(),
+                usage: null,
+              })
+            }
+            if (current.provider === 'volc-ark') {
+              // [本地改造 2026-08-27] 火山方舟 Agent Plan：显示套餐配额快照（5h/周/月
+              // 各用了几成）而非金钱余额。ARK 是按量套餐，无"余额"概念。
+              const usage = await readArkUsage(ctx)
+              return ok(request, {
+                balance: null,
+                gatewayHealthy: null,
+                usage,
+              })
+            }
             if (current.provider !== 'deepseek-official') {
-              return ok(request, { balance: null })
+              return ok(request, { balance: null, gatewayHealthy: null, usage: null })
             }
           }
         }
-        return ok(request, { balance: await readDeepSeekBalance(ctx) })
+        return ok(request, { balance: await readDeepSeekBalance(ctx), gatewayHealthy: null, usage: null })
       },
     },
 

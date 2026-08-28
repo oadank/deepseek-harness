@@ -8,8 +8,8 @@
  * @module dsh-llm-pi-ai/stream
  */
 
-import { CallId, CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
-import type { FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
+import { CallId, CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, latestTransportErrorDetails, LlmError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
+import type { FinishReason, LlmFailure, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { isContextOverflow } from '@earendil-works/pi-ai'
 import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
 import { toPiReplayState } from './replay.ts'
@@ -110,7 +110,15 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
     }
     case 'error': {
       const text = message.errorMessage ?? 'pi-ai stream error'
-      return { kind: 'error', failure: { message: text, code: classifyPiAiError(text) } }
+      const code = classifyPiAiError(text)
+      // [本地补丁 2026-08-27 传输诊断] pi-ai 只把底层错误压平成 message——
+      // 从 resilient fetch 捕获窗取回 cause 链细节（ECONNRESET 等），随
+      // failure.details 进入 llm/retry 会话事件；空则不带该字段。
+      const details = code === 'TRANSPORT' ? latestTransportErrorDetails() : undefined
+      const failure: LlmFailure = details !== undefined && Object.keys(details).length > 0
+        ? { message: text, code, details }
+        : { message: text, code }
+      return { kind: 'error', failure }
     }
   }
 }

@@ -23,9 +23,14 @@ ffmpeg -version      # ffmpeg（语音功能需要；没有就：winget install 
 ```powershell
 # 选一个放源码的目录，例如 D:\dev
 cd D:\dev
-git clone https://github.com/oadank/deepseek-harness.git
+# [弱网推荐] --depth 1 只拉最新一次提交（仓库大，全量 30 万+ 对象，弱网必断）
+# 如果网络好想保留完整历史，去掉 --depth 1 即可
+git clone --depth 1 https://github.com/oadank/deepseek-harness.git
 cd deepseek-harness
 ```
+
+> 浅克隆（--depth 1）后续 `git pull` 拉新版本前，先在仓库里执行一次
+> `git fetch --unshallow` 补全历史，否则 pull 可能报错。
 
 ## 三、一键配置插件
 
@@ -62,7 +67,7 @@ node --import tsx/esm apps/cli/src/bin.ts web --no-open --port 3080
 powershell -ExecutionPolicy Bypass -File scripts\setup-service.ps1
 ```
 
-脚本自动完成：查 node 真实路径 → 设 DSH_HOME 为你的数据目录 → 配日志 → 注册并启动服务。
+脚本自动完成：查 node 真实路径 → 设 DSH_HOME 为你的数据目录 → 自动加 DSH_FORCE_BROWSE_PICKER=1（目录选择走网页树，session 0 下原生弹窗失效的坑自动规避）→ 配日志 → 注册并启动服务。
 远程访问时加参数：`-TrustedHosts "你的域名.ts.net,你的IP"`。
 
 ### 手动方式（了解原理用）
@@ -81,7 +86,11 @@ nssm set dsh-web AppDirectory "<源码目录>\deepseek-harness"
 # 4) ⚠️ 关键一步：让服务使用【你自己的】dsh 数据目录。
 #    服务默认以 LocalSystem 运行，会去读系统账户的目录，找不到你的插件和配置——
 #    不设这一行，语音设置页就是空的。把 <你的用户名> 替换成你的 Windows 用户名：
-nssm set dsh-web AppEnvironmentExtra "DSH_HOME=C:\Users\<你的用户名>\.dsh"
+nssm set dsh-web AppEnvironmentExtra "DSH_HOME=C:\Users\<你的用户名>\.dsh" "DSH_FORCE_BROWSE_PICKER=1"
+
+#    ⚠️ DSH_FORCE_BROWSE_PICKER=1 必设：nssm 服务跑在 session 0，原生目录选择框弹不出来，
+#    "添加工作区"点了没反应（亲测的坑）。设了之后强制用网页目录树（browse），设置 → 工作区目录 才点得动。
+#    手动命令直接跑（非服务）则不需要——源码已默认 Windows 走 browse。
 
 # 5) 日志（方便排查）：
 nssm set dsh-web AppStdout "<源码目录>\logs\dsh-web.out.log"
@@ -142,3 +151,9 @@ powershell -ExecutionPolicy Bypass -File scripts\setup-profile.ps1
 | 语音设置页空白 / 插件路由返回首页 HTML | 服务没加载插件：检查 DSH_HOME（第六节第 4 步） |
 | 试听报错 Cannot find module | 插件已能正确处理带引号命令，重新填脚本提示的最新命令 |
 | 改了页面没反应 | 浏览器硬刷新 Ctrl+Shift+R |
+| 安装脚本报"字符串缺少终止符"/ParseError | PowerShell 5.1 读无 BOM 的脚本中文乱码。本仓库脚本已带 BOM；若你从旧版拷贝过，重新 clone 或在编辑器另存为"带 BOM 的 UTF-8" |
+| 插件装了但设置页显示"未找到 sherpa-onnx" | 检测已兼容独立目录 `~\.dsh\sherpa-onnx` 与插件包内；若装在其他目录，点设置页「检测已安装」手动填 |
+| 设置页显示"未找到 ffmpeg"（服务方式） | 服务以 LocalSystem 运行读不到用户 PATH；`setup-service.ps1` 会自动写 `DSH_VOICE_FFMPEG_BIN`，重跑该脚本即可 |
+| `更新升级`后插件版本没变（Already up to date） | pnpm minimumReleaseAge 供应链策略挡新版本；`setup-profile.ps1` 已自动加 `--config.minimum-release-age=0`，重跑即可 |
+| 中文用户名（如 C:\Users\阿丹）ASR/TTS 报错 | 已修复：生成的服务脚本会 chdir 到安装目录用相对路径，音频经 tmp/ 中转，不再直接传中文绝对路径给 sherpa。重新跑 install-asr.ps1 / install-local-tts.ps1 重新生成即可 |
+| 弱网下载中断报"压缩包损坏" | 已修复：curl 断点续传 + tar 探完整性 + 自动重试 5 次；仍失败重跑脚本即可 |
