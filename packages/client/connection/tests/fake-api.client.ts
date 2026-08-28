@@ -245,7 +245,7 @@ export class FakeApiClient implements IApiClient {
   }
 
   readonly balance: IApiClient['balance'] = {
-    get: payload => this.record('balance.get', payload, Promise.resolve(ok({ balance: null }))),
+    get: payload => this.record('balance.get', payload, Promise.resolve(ok({ balance: null, gatewayHealthy: null, usage: null }))),
   }
 
   /** When true, streams never fire onOpen (misbehaving-carrier material for the handshake timeout guard). */

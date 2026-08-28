@@ -743,7 +743,8 @@ export function InputBar({
                 className={css.primary}
                 aria-label={primaryLabel}
                 disabled={primaryStops ? stop === undefined : empty || disabled || machineBusy}
-                onMouseDown={keepFocus}
+                // [本地改造] 停止态 blur 输入框（移动端点停止不再弹输入法），发送态 keepFocus（打字无缝）
+                onMouseDown={primaryStops ? releaseFocus : keepFocus}
                 onClick={onPrimary}
               >
                 {primaryStops ? (

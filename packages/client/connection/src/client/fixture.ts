@@ -2640,7 +2640,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
     },
     balance: {
       // [本地改造] 余额展示已迁移至插件；fixture 不提供真实余额。
-      get: async request => ok(request, { balance: null }),
+      get: async request => ok(request, { balance: null, gatewayHealthy: null, usage: null }),
     },
     subagents: {
       list: request => ok(request, { entries: [], parentAvailable: true }),

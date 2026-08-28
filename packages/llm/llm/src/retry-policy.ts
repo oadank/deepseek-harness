@@ -33,6 +33,19 @@ export interface BackoffConfig {
   jitterRatio?: number
 }
 
+/** Per-code retry override for a bounded transient policy. */
+export interface PerCodeRetryConfig {
+  /** Eligible retries for this code, overriding the policy's `maxRetries`. */
+  maxRetries?: number
+  /** Local exponential-backoff and jitter for this code, overriding `backoff`. */
+  backoff?: BackoffConfig
+}
+
+/** Fully resolved per-code override: bounded retries with its own backoff. */
+export interface ResolvedPerCodeRetry extends ResolvedRetryBackoff {
+  readonly maxRetries: number
+}
+
 /** Current bounded transient retry behavior for one provider route. */
 export interface NormalRetryPolicyConfig {
   /** Retry only configured transient failure codes. */
@@ -43,6 +56,12 @@ export interface NormalRetryPolicyConfig {
   retryableCodes?: string[]
   /** Local exponential-backoff and jitter configuration. */
   backoff?: BackoffConfig
+  /**
+   * Per-code overrides: stable failure codes may carry their own retry budget
+   * and backoff (e.g. `TRANSPORT` gets a longer recovery window than HTTP
+   * statuses). Unlisted codes keep the policy-level values.
+   */
+  codes?: Record<string, PerCodeRetryConfig>
 }
 
 /** Unbounded retry behavior for every model-request failure on one provider route. */
@@ -68,6 +87,8 @@ export interface ResolvedNormalRetryPolicy extends ResolvedRetryBackoff {
   readonly mode: 'normal'
   readonly maxRetries: number
   readonly retryableCodes: readonly string[]
+  /** Per-code overrides; empty when none configured. */
+  readonly codes: Readonly<Record<string, ResolvedPerCodeRetry>>
 }
 
 /** Fully resolved unbounded retry policy. */
@@ -84,11 +105,20 @@ const backoffSchema: z<BackoffConfig> = z.object({
   jitterRatio: z.number().min(0).max(1).default(DEFAULT_JITTER_RATIO),
 })
 
+/** Shared empty per-code map so default policies never allocate per call. */
+const EMPTY_CODES: Readonly<Record<string, ResolvedPerCodeRetry>> = Object.freeze({})
+
+const perCodeSchema: z<PerCodeRetryConfig> = z.object({
+  maxRetries: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER),
+  backoff: backoffSchema,
+})
+
 const normalPolicySchema: z<NormalRetryPolicyConfig> = z.object({
   mode: z.const('normal').required(),
   maxRetries: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_MAX_RETRIES),
   retryableCodes: z.array(z.string()).default([...DEFAULT_RETRYABLE_CODES]),
   backoff: backoffSchema,
+  codes: z.dict(perCodeSchema),
 })
 
 const alwaysPolicySchema: z<AlwaysRetryPolicyConfig> = z.object({
@@ -103,14 +133,15 @@ export const RetryPolicySchema: z<RetryPolicyConfig> = z.union([
 ])
 
 const NORMAL_POLICY_KEYS: ReadonlySet<string> = new Set([
-  'mode', 'maxRetries', 'retryableCodes', 'backoff',
+  'mode', 'maxRetries', 'retryableCodes', 'backoff', 'codes',
 ])
 // Layered configuration can retain normal-only fields after switching modes;
 // always mode ignores those inactive values while still rejecting unknown keys.
 const ALWAYS_POLICY_KEYS: ReadonlySet<string> = new Set([
-  'mode', 'maxRetries', 'retryableCodes', 'backoff',
+  'mode', 'maxRetries', 'retryableCodes', 'backoff', 'codes',
 ])
 const BACKOFF_KEYS: ReadonlySet<string> = new Set(['initialDelayMs', 'maxDelayMs', 'jitterRatio'])
+const PER_CODE_KEYS: ReadonlySet<string> = new Set(['maxRetries', 'backoff'])
 
 function validateKeys(value: object, allowed: ReadonlySet<string>, path: string): void {
   for (const key of Object.keys(value)) {
@@ -155,6 +186,7 @@ export function resolveRetryPolicy(
       mode: 'normal',
       maxRetries: DEFAULT_MAX_RETRIES,
       retryableCodes: DEFAULT_RETRYABLE_CODES,
+      codes: EMPTY_CODES,
       ...resolveBackoff(undefined, `${path}.backoff`),
     })
   }
@@ -176,10 +208,28 @@ export function resolveRetryPolicy(
       if (new Set(retryableCodes).size !== retryableCodes.length) {
         throw new Error(`${path}.retryableCodes must not contain duplicates`)
       }
+      const codes: Record<string, ResolvedPerCodeRetry> = {}
+      if (config.codes !== undefined) {
+        for (const [code, override] of Object.entries(config.codes)) {
+          if (typeof code !== 'string' || code.length === 0) {
+            throw new Error(`${path}.codes keys must be non-empty strings`)
+          }
+          validateKeys(override, PER_CODE_KEYS, `${path}.codes.${code}`)
+          const codeMaxRetries = override.maxRetries ?? maxRetries
+          if (!Number.isSafeInteger(codeMaxRetries) || codeMaxRetries < 0) {
+            throw new Error(`${path}.codes.${code}.maxRetries must be a non-negative safe integer`)
+          }
+          codes[code] = Object.freeze({
+            maxRetries: codeMaxRetries,
+            ...resolveBackoff(override.backoff, `${path}.codes.${code}.backoff`),
+          })
+        }
+      }
       return Object.freeze({
         mode: 'normal',
         maxRetries,
         retryableCodes: Object.freeze([...retryableCodes]),
+        codes: Object.freeze(codes),
         ...resolveBackoff(config.backoff, `${path}.backoff`),
       })
     }

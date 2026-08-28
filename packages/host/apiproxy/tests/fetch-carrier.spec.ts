@@ -305,7 +305,7 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
     },
     balance: {
       async get(request) {
-        return { rpcId: request.rpcId, result: { ok: true, value: { balance: null } } }
+        return { rpcId: request.rpcId, result: { ok: true, value: { balance: null, gatewayHealthy: null, usage: null } } }
       },
     },
     events: {

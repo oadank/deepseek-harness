@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto'
 import type { Context, Events } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Agent, RequestErrorAction } from '@deepseek-ai/dsh-agent'
-import type { LlmFailure, ResolvedRetryPolicy } from '@deepseek-ai/dsh-llm'
+import type { LlmFailure, ResolvedPerCodeRetry, ResolvedRetryBackoff, ResolvedRetryPolicy } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { RetryId } from './brand.ts'
 import type { LlmRetryEventData } from './types.ts'
@@ -55,7 +55,7 @@ async function settleDownstream(
   }
 }
 
-function localDelay(config: ResolvedRetryPolicy, retry: number, random: () => number): number {
+function localDelay(config: ResolvedRetryBackoff, retry: number, random: () => number): number {
   const exponent = Math.min(retry - 1, 1024)
   const exponential = Math.min(config.initialDelayMs * 2 ** exponent, config.maxDelayMs)
   const jitter = 1 - config.jitterRatio + 2 * config.jitterRatio * random()
@@ -63,16 +63,28 @@ function localDelay(config: ResolvedRetryPolicy, retry: number, random: () => nu
 }
 
 function retryPolicyKey(policy: ResolvedRetryPolicy): string {
-  return policy.mode === 'always'
-    ? JSON.stringify([policy.mode, policy.initialDelayMs, policy.maxDelayMs, policy.jitterRatio])
-    : JSON.stringify([
-      policy.mode,
-      policy.maxRetries,
-      [...policy.retryableCodes].sort(),
-      policy.initialDelayMs,
-      policy.maxDelayMs,
-      policy.jitterRatio,
-    ])
+  if (policy.mode === 'always') {
+    return JSON.stringify([policy.mode, policy.initialDelayMs, policy.maxDelayMs, policy.jitterRatio])
+  }
+  const codes = Object.keys(policy.codes)
+  // 未配置 per-code 时保持历史 key 形状（既有测试/会话兼容）；有配置才附加。
+  return JSON.stringify([
+    policy.mode,
+    policy.maxRetries,
+    [...policy.retryableCodes].sort(),
+    policy.initialDelayMs,
+    policy.maxDelayMs,
+    policy.jitterRatio,
+    ...codes.length > 0 ? [normalizeCodes(policy.codes)] : [],
+  ])
+}
+
+/** Stable serialized form of the per-code overrides for policy-key matching. */
+function normalizeCodes(codes: Readonly<Record<string, ResolvedPerCodeRetry>>): unknown[][] {
+  return Object.keys(codes).sort().map((code) => {
+    const override = codes[code] as ResolvedPerCodeRetry
+    return [code, override.maxRetries, override.initialDelayMs, override.maxDelayMs, override.jitterRatio]
+  })
 }
 
 function cancellableDelay(delayMs: number, signal: AbortSignal): Promise<boolean> {
@@ -120,6 +132,7 @@ export function apply(ctx: Context, config: Config = {}, internals: RetryInterna
     retryId: RetryId,
     delayMs: number,
     signal: AbortSignal,
+    maxRetries: number,
   ): Promise<RequestErrorAction> {
     const fusedSignal = AbortSignal.any([signal, lifetime.signal])
     if (fusedSignal.aborted) return
@@ -132,7 +145,7 @@ export function apply(ctx: Context, config: Config = {}, internals: RetryInterna
         mode: policy.mode,
         policyKey,
         retry,
-        maxRetries: policy.maxRetries,
+        maxRetries: maxRetries,
         delayMs,
         failure,
       }
@@ -179,6 +192,14 @@ export function apply(ctx: Context, config: Config = {}, internals: RetryInterna
     }
 
     const policyKey = retryPolicyKey(policy)
+    // [本地补丁 2026-08-27 per-code 重试策略] TRANSPORT 等故障码可携带自己的
+    // 重试预算与退避（如 8 次 / 最长 15s 的恢复窗口），与 429/5xx 的 5 次策略
+    // 分离；未配置的码回退到策略级参数。
+    const codeOverride = policy.mode === 'normal' ? policy.codes?.[failure.code] : undefined
+    const effectiveMaxRetries = codeOverride?.maxRetries ?? (policy.mode === 'normal' ? policy.maxRetries : 0)
+    // ResolvedPerCodeRetry 平铺了 per-code 退避参数（initialDelayMs/maxDelayMs/jitterRatio），
+    // 可直接当作 ResolvedRetryBackoff 使用；未配置时回退策略级参数。
+    const effectiveBackoff: ResolvedRetryBackoff = codeOverride ?? policy
     const priorPolicyRetry = agent.session.events.findLast((event): event is SessionEvent<'llm/retry'> =>
       event.type === 'llm/retry'
       && event.data.turn === turn
@@ -187,24 +208,24 @@ export function apply(ctx: Context, config: Config = {}, internals: RetryInterna
       && event.data.policyKey === policyKey,
     )
     const previousRetry = priorPolicyRetry?.data.retry ?? 0
-    if (policy.mode === 'normal' && previousRetry >= policy.maxRetries) return next()
+    if (policy.mode === 'normal' && previousRetry >= effectiveMaxRetries) return next()
     const retry = previousRetry + 1
     const retryId = priorPolicyRetry?.data.retryId ?? RetryId(randomUUID())
     let delayMs: number
     if (failure.providerRetryAfterMs !== undefined
       && Number.isFinite(failure.providerRetryAfterMs)
       && failure.providerRetryAfterMs > 0) {
-      if (failure.providerRetryAfterMs > policy.maxDelayMs) {
+      if (failure.providerRetryAfterMs > effectiveBackoff.maxDelayMs) {
         if (policy.mode === 'normal') return next()
-        delayMs = localDelay(policy, retry, random)
+        delayMs = localDelay(effectiveBackoff, retry, random)
       } else {
         delayMs = failure.providerRetryAfterMs
       }
     } else {
-      delayMs = localDelay(policy, retry, random)
+      delayMs = localDelay(effectiveBackoff, retry, random)
     }
 
-    return backoff(agent, turn, step, failure, provider, policy, policyKey, retry, retryId, delayMs, signal)
+    return backoff(agent, turn, step, failure, provider, policy, policyKey, retry, retryId, delayMs, signal, effectiveMaxRetries)
   }
 
   const disposeListener = ctx.on('agent/request-error', (

@@ -34,6 +34,7 @@ import type {
 import {
   attributionHeaders,
   contentHasImage,
+  installResilientFetch,
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
@@ -193,6 +194,11 @@ export class PiAiAdapter extends LlmAdapter {
 
   constructor(private readonly config: PiAiAdapterOptions) {
     super()
+    // [本地补丁 2026-08-27 传输加固] pi-ai 内部使用全局 fetch 且把底层错误
+    // 扁平化为文本——安装 resilient fetch（undici Agent 单例 + 连接重置码重建
+    // 连接池 + cause 链细节捕获），让 gw 这类 pi-ai 路由的 TRANSPORT 失败
+    // 可诊断（llm/retry.failure.details 带 ECONNRESET 等）并在坏连接时自动恢复。
+    installResilientFetch()
   }
 
   /**

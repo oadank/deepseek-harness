@@ -139,7 +139,7 @@ function scriptedApi(overrides: {
       ...overrides.llm,
     },
     balance: {
-      get: r => ok(r, { balance: null }),
+      get: r => ok(r, { balance: null, gatewayHealthy: null, usage: null }),
     },
     events: { mux: () => empty<MuxFrame>(), host: () => empty<HostFrame>(), ...overrides.events },
     respond: overrides.respond ?? (() => Promise.resolve({ accepted: false as const, reason: 'not-pending' as const })),

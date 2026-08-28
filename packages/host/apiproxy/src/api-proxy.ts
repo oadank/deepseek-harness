@@ -3,7 +3,7 @@
  * narrow RpcRequest<P> and echoes request.rpcId on the RpcResponse<T>.
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { mkdir, rm, stat, writeFile, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -36,7 +36,7 @@ import {
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {
-  ApiProxy, BalanceView, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
+  ApiProxy, ArkUsageView, BalanceView, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
   ModelCatalogFailure, ModelProviderGroup,
   ModelReasoning, MuxFrame, PromptContentPart, QuestionResponsePayload, SessionListMetadata, SessionProjectionsBlock, SessionSearchItem,
   QueuedInboxItem, SessionSummary, SettingsNamespaceView, SubagentAddress, JobView, ToolEventView,
@@ -254,6 +254,158 @@ async function readGwBalance(ctx: Context): Promise<BalanceView | null> {
   } catch {
     // 网络抖动/超时：保留旧缓存值（若有），否则 null——绝不把失败抛给 UI。
     return gwBalanceCache?.value ?? null
+  }
+}
+
+/**
+ * ARK Agent Plan 套餐配额缓存（60 秒过期：套餐配额非实时变化，且 V4 签名请求较重，
+ * 缓存周期比余额长）。与余额/健康缓存同一容错哲学：失败返回 null，绝不抛给 UI。
+ */
+let arkUsageCache: { value: ArkUsageView | null; cachedAt: number } | null = null
+
+/** 火山方舟 OpenAPI（用量/配额查询）公网网关常量。 */
+const ARK_OPENAPI_HOST = 'ark.cn-beijing.volcengineapi.com'
+const ARK_OPENAPI_REGION = 'cn-beijing'
+const ARK_OPENAPI_SERVICE = 'ark'
+
+/**
+ * 查询火山方舟（volc-ark）Agent Plan 套餐配额快照。读取 VOLC_ACCESS_KEY_ID /
+ * VOLC_SECRET_ACCESS_KEY 凭证（火山控制台「密钥管理」创建），用 Volcengine V4
+ * 签名调 GetAFPUsage OpenAPI：query 带 Action/Version，业务参数为空 body，签名
+ * seed 为 SecretAccessKey 本身（无前缀）。返回 5h / 周 / 月 三个周期的已用配额，
+ * 供前端算"各用了几成"。无凭证、非套餐订阅或查询失败一律返回 null。
+ * [本地改造 2026-08-27] 火山套餐配额非按量余额，故单独走本函数返回 ArkUsageView。
+ * @param ctx - host context（读 credentials 可选服务）。
+ * @returns ARK 套餐配额视图；不可用时为 null。
+ */
+async function readArkUsage(ctx: Context): Promise<ArkUsageView | null> {
+  const now = Date.now()
+  if (arkUsageCache !== null && now - arkUsageCache.cachedAt < 60_000) {
+    return arkUsageCache.value
+  }
+  const credentials = ctx.get('credentials')
+  const resolveCred = async (ref: string): Promise<string | undefined> => {
+    if (credentials !== undefined) {
+      const hit = await credentials.resolve(credentialRef(ref))
+      return hit?.value
+    }
+    return process.env[ref]
+  }
+  const accessKeyId = await resolveCred('VOLC_ACCESS_KEY_ID')
+  const secretAccessKey = await resolveCred('VOLC_SECRET_ACCESS_KEY')
+  if (accessKeyId === undefined || accessKeyId.length === 0 || secretAccessKey === undefined || secretAccessKey.length === 0) {
+    arkUsageCache = { value: null, cachedAt: now }
+    return null
+  }
+  try {
+    const xdate = new Date().toISOString()
+      .replace(/\.\d{3}Z$/, 'Z')
+      .replace(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z/, '$1$2$3T$4$5$6Z')
+    const query = 'Action=GetAFPUsage&Version=2024-01-01'
+    const body = '{}'
+    const payloadHash = createHash('sha256').update(body, 'utf8').digest('hex')
+    const signedHeaders = ['host', 'x-content-sha256', 'x-date']
+    const canonicalHeaders = [
+      `host:${ARK_OPENAPI_HOST}\n`,
+      `x-content-sha256:${payloadHash}\n`,
+      `x-date:${xdate}\n`,
+    ].sort().join('')
+    const canonicalRequest = ['POST', '/', query, canonicalHeaders, signedHeaders.join(';'), payloadHash].join('\n')
+    const scope = `${xdate.slice(0, 8)}/${ARK_OPENAPI_REGION}/${ARK_OPENAPI_SERVICE}/request`
+    const stringToSign = [
+      'HMAC-SHA256',
+      xdate,
+      scope,
+      createHash('sha256').update(canonicalRequest, 'utf8').digest('hex'),
+    ].join('\n')
+    const kDate = createHmac('sha256', secretAccessKey).update(xdate.slice(0, 8), 'utf8').digest()
+    const kRegion = createHmac('sha256', kDate).update(ARK_OPENAPI_REGION, 'utf8').digest()
+    const kService = createHmac('sha256', kRegion).update(ARK_OPENAPI_SERVICE, 'utf8').digest()
+    const kSigning = createHmac('sha256', kService).update('request', 'utf8').digest()
+    const signature = createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex')
+    const authorization =
+      `HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders.join(';')}, Signature=${signature}`
+
+    const response = await fetch(`https://${ARK_OPENAPI_HOST}/?${query}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-date': xdate,
+        'x-content-sha256': payloadHash,
+        Authorization: authorization,
+      },
+      body,
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) {
+      arkUsageCache = { value: null, cachedAt: now }
+      return null
+    }
+    const data = await response.json() as {
+      Result?: {
+        PlanType?: string
+        AFPFiveHour?: { Quota: number; Used: number; ResetTime: number }
+        AFPWeekly?: { Quota: number; Used: number; ResetTime: number }
+        AFPMonthly?: { Quota: number; Used: number; ResetTime: number }
+      }
+    }
+    const result = data.Result
+    if (result === undefined) {
+      arkUsageCache = { value: null, cachedAt: now }
+      return null
+    }
+    const periodView = (label: string, p?: { Quota: number; Used: number; ResetTime: number }) =>
+      p === undefined
+        ? null
+        : { label, quota: Number(p.Quota), used: Number(p.Used), resetAt: Number(p.ResetTime) ?? 0 }
+    const periods = [
+      periodView('5h', result.AFPFiveHour),
+      periodView('weekly', result.AFPWeekly),
+      periodView('monthly', result.AFPMonthly),
+    ].filter((p): p is NonNullable<typeof p> => p !== null)
+    if (periods.length === 0) {
+      arkUsageCache = { value: null, cachedAt: now }
+      return null
+    }
+    const value: ArkUsageView = { planType: result.PlanType ?? '', periods }
+    arkUsageCache = { value, cachedAt: now }
+    return value
+  } catch {
+    // 网络抖动/超时：保留旧缓存值（若有），否则 null——绝不把失败抛给 UI。
+    return arkUsageCache?.value ?? null
+  }
+}
+
+/** GW 网关健康缓存（5 秒过期，与余额一致：仅防抖重复探测，不后台刷新）。 */
+let gwHealthCache: { value: boolean | null; cachedAt: number } | null = null
+
+/**
+ * 探测 henry-gao GW 网关健康状况。调网关公开的 GET /health（状态页自身使用的
+ * 健康接口，无需凭证）：返回 JSON 且 `ready: true` 视为正常，HTTP 非 200 或
+ * 请求失败/超时视为异常。浏览器直连会被 CORS 拦截，故必须由服务端代查。
+ * 非 gw 直连场景不调用本函数（由 balance.get 分流决定）。
+ * @returns true=正常、false=异常；探测无法判定时为 null（保留旧缓存值若有）。
+ */
+async function readGwHealth(): Promise<boolean | null> {
+  const now = Date.now()
+  if (gwHealthCache !== null && now - gwHealthCache.cachedAt < 5_000) {
+    return gwHealthCache.value
+  }
+  try {
+    const response = await fetch('https://gateway.henry-gao.com/health', {
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) {
+      gwHealthCache = { value: false, cachedAt: now }
+      return false
+    }
+    const data = await response.json() as { ready?: boolean }
+    const value = data.ready === true
+    gwHealthCache = { value, cachedAt: now }
+    return value
+  } catch {
+    // 网络抖动/超时：保留旧缓存值（若有），否则 null——绝不把失败抛给 UI。
+    return gwHealthCache?.value ?? null
   }
 }
 
@@ -3831,14 +3983,29 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           if (!('error' in found)) {
             const current = selectionFor(found.agent).current
             if (current.provider === 'gw') {
-              return ok(request, { balance: await readGwBalance(ctx) })
+              return ok(request, {
+                balance: await readGwBalance(ctx),
+                // [本地改造 2026-08-27] gw 网关健康状态：真实探测 /health（true=正常/绿、false=异常/红）。
+                gatewayHealthy: await readGwHealth(),
+                usage: null,
+              })
+            }
+            if (current.provider === 'volc-ark') {
+              // [本地改造 2026-08-27] 火山方舟 Agent Plan：显示套餐配额快照（5h/周/月
+              // 各用了几成）而非金钱余额。ARK 是按量套餐，无"余额"概念。
+              const usage = await readArkUsage(ctx)
+              return ok(request, {
+                balance: null,
+                gatewayHealthy: null,
+                usage,
+              })
             }
             if (current.provider !== 'deepseek-official') {
-              return ok(request, { balance: null })
+              return ok(request, { balance: null, gatewayHealthy: null, usage: null })
             }
           }
         }
-        return ok(request, { balance: await readDeepSeekBalance(ctx) })
+        return ok(request, { balance: await readDeepSeekBalance(ctx), gatewayHealthy: null, usage: null })
       },
     },
 
