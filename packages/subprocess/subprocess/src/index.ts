@@ -44,6 +44,15 @@ export type {
 export const SENSITIVE_ENV_PATTERN = /KEY|PASSWORD|SECRET|TOKEN/i
 
 /**
+ * Deliberate deployment exceptions to the credential scrub: public-tool tokens
+ * that exist precisely so agent-driven child CLIs can use them (GitHub CLI
+ * auth, `curl -H "Authorization: token $GITHUB_TOKEN"`). The parent harness
+ * injects them on purpose; they carry no harness identity. Matched
+ * case-insensitively, same as the scrub.
+ */
+export const CREDENTIAL_ENV_ALLOWLIST = new Set(['GITHUB_TOKEN', 'GH_TOKEN'])
+
+/**
  * The ambient parent environment minus credential-shaped names and minus all
  * `DSH_*` names — the canonical base every harness child starts from. `PATH`,
  * `HOME`, locale, and proxy variables survive, so child CLIs run normally;
@@ -60,7 +69,8 @@ export const SENSITIVE_ENV_PATTERN = /KEY|PASSWORD|SECRET|TOKEN/i
 export function scrubbedParentEnv(): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && !SENSITIVE_ENV_PATTERN.test(key) && !key.toUpperCase().startsWith(DSH_ENV_PREFIX)) env[key] = value
+    const sensitive = SENSITIVE_ENV_PATTERN.test(key) && !CREDENTIAL_ENV_ALLOWLIST.has(key.toUpperCase())
+    if (value !== undefined && !sensitive && !key.toUpperCase().startsWith(DSH_ENV_PREFIX)) env[key] = value
   }
   return env
 }
