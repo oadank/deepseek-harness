@@ -31,8 +31,13 @@ import { transportErrorDetails } from './error-details.ts'
 
 /** Connect timeout for the pooled Agent, per upstream guidance (ms). */
 const CONNECT_TIMEOUT_MS = 10_000
-/** Max time waiting for response headers before the request is aborted (ms). */
-const HEADERS_TIMEOUT_MS = 30_000
+/**
+ * Max time waiting for response headers before the request is aborted (ms).
+ * [2026-09-01] 30s → 13min：本机全局 fetch 也承载本地 TTS（audio8 :18795 克隆声
+ * CPU 推理，长文本可达数分钟才回响应头），30s 会把正常慢请求错杀。LLM 网关的
+ * 真死连接由 agent loop 自身的 signal 超时兜底，不靠这个传输层守卫。
+ */
+const HEADERS_TIMEOUT_MS = 780_000
 /** Disable the response-body inactivity cutoff (the loop owns idle timeouts). */
 const BODY_TIMEOUT_MS = 0
 /** Idle keep-alive lifetime (ms); expired sockets close. */
@@ -160,15 +165,17 @@ export function installResilientFetch(): void {
     // dispatcher 是 undici 的扩展字段（全局 fetch 类型未声明，运行时同一实现）。
     const dispatcherInit = { ...init, dispatcher: ensureDispatcher() } as RequestInit & { dispatcher: unknown }
     const result = undiciFetchCompat(input, dispatcherInit)
-    const pass = (error: unknown): never => {
-      // Non-cancellation failures only: cancellation is not a network fault.
-      if (signal?.aborted === true) throw error
+    const observe = (error: unknown): void => {
+      // [2026-09-01 根治 fatal] 此观察链只做捕获，绝不 rethrow：`.then(undefined, observe)`
+      // 会派生出一个新 promise，观察器一旦 rethrow，该派生 promise 被拒绝且无人
+      // 接（`void` 不算处理）→ unhandledRejection → app-boot installFailLoud 直接
+      // 杀进程。真实失败仍经下方原样 return 的 `result` 交给调用方处理。
+      if (signal?.aborted === true) return
       if (shouldResetConnection(error)) resetDispatcher()
       capture(input, error)
-      throw error
     }
     // Capture failures for both stages of the returned promise chain.
-    void result.then(undefined, pass)
+    void result.then(undefined, observe)
     return result
   }
   globalThis.fetch = resilientFetch
