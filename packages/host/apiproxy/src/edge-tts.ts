@@ -57,19 +57,32 @@ function getWssHeaders(): Record<string, string> {
 
 /**
  * Synthesize speech through the free Microsoft Edge endpoint.
+ * [本地改造 2026-09-01] 单次尝试 12s 硬超时 + 自动重试（最多 3 次，间隔递增）：
+ * Edge 免费端点走公网 WSS，偶发握手失败/DRM 令牌瞬失效/代理链路抖动，
+ * 一次失败直接把错误抛给上层会让语音回复整条挂掉，重试即可自愈。
  * @param text - plain text to speak.
  * @param voice - Edge voice name (default zh-CN-XiaoxiaoNeural).
  * @returns MP3 bytes (audio-24khz-48kbitrate-mono-mp3).
  */
-export function edgeTts(text: string, voice = 'zh-CN-XiaoxiaoNeural'): Promise<Buffer> {
+function edgeTtsOnce(text: string, voice: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(getWssUrl(), { headers: getWssHeaders() })
     const audioData: Buffer[] = []
     let messageTimeout: ReturnType<typeof setTimeout> | undefined
+    // 防止 resolve/reject 之后的迟到事件再次回调（ws.terminate 后 error 事件仍可能触发）。
+    let settled = false
+    const settle = (done: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(connectTimeout)
+      if (messageTimeout !== undefined) clearTimeout(messageTimeout)
+      done()
+    }
 
+    // 连接超时（10秒）
     const connectTimeout = setTimeout(() => {
       ws.terminate()
-      reject(new Error('Edge TTS WebSocket connect timeout (10s)'))
+      settle(() => reject(new Error('Edge TTS WebSocket connect timeout (10s)')))
     }, 10_000)
 
     ws.on('message', (rawData, isBinary) => {
@@ -78,8 +91,7 @@ export function edgeTts(text: string, voice = 'zh-CN-XiaoxiaoNeural'): Promise<B
       if (!isBinary) {
         const str = buf.toString('utf8')
         if (str.includes('turn.end')) {
-          if (messageTimeout !== undefined) clearTimeout(messageTimeout)
-          resolve(Buffer.concat(audioData))
+          settle(() => resolve(Buffer.concat(audioData)))
           ws.close()
         }
         return
@@ -90,16 +102,17 @@ export function edgeTts(text: string, voice = 'zh-CN-XiaoxiaoNeural'): Promise<B
     })
 
     ws.on('error', (err) => {
-      clearTimeout(connectTimeout)
-      reject(err)
+      ws.terminate()
+      settle(() => reject(err))
     })
 
     ws.on('open', () => {
       clearTimeout(connectTimeout)
+      // 收流超时（12秒）：Edge 正常 1-3 秒完成合成，超时基本等于链路异常，交给重试层。
       messageTimeout = setTimeout(() => {
-        ws.close()
-        reject(new Error('Edge TTS message timeout (30s)'))
-      }, 30_000)
+        ws.terminate()
+        settle(() => reject(new Error('Edge TTS message timeout (12s)')))
+      }, 12_000)
 
       const speechConfig = JSON.stringify({
         context: { synthesis: { audio: {
@@ -116,4 +129,24 @@ export function edgeTts(text: string, voice = 'zh-CN-XiaoxiaoNeural'): Promise<B
       ws.send(ssmlMsg, { compress: true })
     })
   })
+}
+
+/** 单次尝试硬超时基数：连接 10s + 收流 12s，正常合成 1-3 秒即可完成。 */
+const MAX_ATTEMPTS = 3
+
+/**
+ * 带重试的 Edge TTS：最多 3 次尝试（首次 + 2 次重试），失败间隔递增（500ms/1s）。
+ * 全部失败才把最后一次的错误抛给上层。
+ */
+export async function edgeTts(text: string, voice = 'zh-CN-XiaoxiaoNeural'): Promise<Buffer> {
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await edgeTtsOnce(text, voice)
+    } catch (err) {
+      lastErr = err
+      if (attempt < MAX_ATTEMPTS) await new Promise(r => setTimeout(r, 500 * attempt))
+    }
+  }
+  throw lastErr
 }
