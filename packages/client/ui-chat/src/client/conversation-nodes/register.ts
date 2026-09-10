@@ -4,6 +4,7 @@ import { registerChatConversationView } from './chat-snapshot-builder.ts'
 import { registerCommandConversationNode } from './command.ts'
 import { registerCompactionConversationNode } from './compaction.ts'
 import { registerUnknownConversationFallback } from './fallback.ts'
+import { registerImageReplyConversationNode } from './image-reply.ts'
 import { registerInboxConversationNodes } from './inbox.ts'
 import { registerMessageConversationNode } from './message.ts'
 import { registerRequestPromptConversationNode } from './request-prompt.ts'
@@ -13,6 +14,7 @@ import { registerTurnErrorConversationNode } from './turn-error.ts'
 import { registerTurnMaxTokensConversationNode } from './turn-max-tokens.ts'
 import { registerTurnProcess } from './turn-process.ts'
 import { registerTurnTailConversationNode } from './turn-tail.ts'
+import { registerVoiceReplyConversationNode } from './voice-reply.ts'
 
 /**
  * Register the Chat business Definitions and target builder contributed by this package.
@@ -31,6 +33,8 @@ export function registerConversationNodes(ctx: Context): void {
   registerTurnErrorConversationNode(ctx)
   registerTurnMaxTokensConversationNode(ctx)
   registerTurnTailConversationNode(ctx)
+  registerVoiceReplyConversationNode(ctx)
+  registerImageReplyConversationNode(ctx)
   registerUnknownConversationFallback(ctx)
   registerChatConversationView(ctx)
 }

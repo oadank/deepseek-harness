@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { NS } from '../locale.ts'
 import { AssistantNodeView } from './AssistantNodeView.tsx'
 import { CommandNodeView, ManualCompactionNodeView } from './CommandNodeView.tsx'
+import { ImageReplyNodeView } from './ImageReplyNodeView.tsx'
 import {
   CompactionNodeView, ContextMessageNodeView, RetryNodeView, TurnErrorNodeView,
   TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
@@ -9,6 +10,7 @@ import {
 import { SystemPromptNodeView } from './SystemPromptRow.tsx'
 import { TurnProcessNodeView } from './TurnProcessNodeView.tsx'
 import { TurnTailNodeView } from './TurnTailNodeView.tsx'
+import { VoiceReplyNodeView } from './VoiceReplyNodeView.tsx'
 
 /**
  * Register this package's business renderers behind the keyed Chat Node seat.
@@ -52,6 +54,10 @@ export function registerChatNodeRenderers(ctx: Context): void {
       'conversation.chat.assistant-actions': { kind: 'list', scope: 'session' },
     },
   }, TurnTailNodeView))
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+    { name: 'conversation.chat.node', key: 'voice-reply', locale: NS }, VoiceReplyNodeView))
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+    { name: 'conversation.chat.node', key: 'image-reply', locale: NS }, ImageReplyNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
     { name: 'conversation.chat.node', key: 'unknown', locale: NS }, UnknownNodeView))
 }

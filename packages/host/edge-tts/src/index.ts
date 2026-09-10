@@ -6,6 +6,9 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { DEFAULT_EDGE_TTS_VOICE, edgeTts } from './edge-tts.ts'
 
 export const name = 'edge-tts'
@@ -13,6 +16,8 @@ export const inject: string[] = []
 
 /** Authenticated browser path for one synthesis request. */
 export const EDGE_TTS_PATH = '/api/edge-tts'
+/** Authenticated browser path for reading one stored voice object. */
+export const VOICE_READ_PATH = '/api/voice'
 
 /** JSON body of one synthesis request. */
 interface EdgeTtsRequestBody {
@@ -35,12 +40,50 @@ function connectionOf(ctx: Context): ConnectionFetchHost {
   return Reflect.get(ctx, 'connection') as ConnectionFetchHost
 }
 
+function voiceObjectPath(voiceId: string): string {
+  const sha = voiceId.replace(/^sha256:/, '')
+  if (!/^[0-9a-f]{64}$/i.test(sha)) throw new Error('invalid voiceId')
+  const home = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  return join(home, 'attachments', 'v1', 'objects', sha.slice(0, 2), sha)
+}
+
 /**
- * Register the `/api/edge-tts` synthesis route on the shared API channel.
+ * Register synthesis and voice-object read routes on the shared API channel.
  * @param ctx - Host context carrying Connection Fetch.
  */
 export function apply(ctx: Context): void {
-  connectionOf(ctx).fetch.register({
+  const connection = connectionOf(ctx)
+  connection.fetch.register({
+    path: VOICE_READ_PATH,
+    methods: ['GET', 'HEAD'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      const voiceId = new URL(request.url).searchParams.get('voiceId')
+      if (voiceId === null || voiceId === '') {
+        return new Response('missing voiceId', { status: 400 })
+      }
+      try {
+        const data = await readFile(voiceObjectPath(voiceId))
+        if (request.method === 'HEAD') {
+          return new Response(null, {
+            status: 200,
+            headers: { 'Content-Length': String(data.byteLength) },
+          })
+        }
+        return new Response(new Uint8Array(data), {
+          status: 200,
+          headers: {
+            'Content-Type': 'audio/mpeg',
+            'Content-Length': String(data.byteLength),
+            'Cache-Control': 'private, max-age=31536000, immutable',
+          },
+        })
+      } catch {
+        return new Response('voice not found', { status: 404 })
+      }
+    },
+  })
+  connection.fetch.register({
     path: EDGE_TTS_PATH,
     methods: ['POST'],
     requestBody: 'buffered',

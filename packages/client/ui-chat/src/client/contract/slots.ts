@@ -14,7 +14,7 @@ import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { createChatStore } from '../stores.ts'
 import type { ToolCallId } from './store.ts'
-import type { ChatConversationViewNode, ChatNode, ChatNodeKind } from './chat-nodes.ts'
+import type { ChatConversationViewNode, ChatNode, ChatNodeKind, VoiceAttachmentRef } from './chat-nodes.ts'
 import type {
   ChatNodeProcessSource, ChatNodeSource, ChatSnapshot, ChatTurnProcessPresentation,
 } from './snapshot.ts'
@@ -89,6 +89,11 @@ export interface ChatNodeOwnerProps {
    * rendering closure.
    */
   loadImage: MessageImageLoader
+  /**
+   * [本地改造 2026-08-16 / 0.1.5 已迁移] Session-authorized voice loader: resolves
+   * a durable voice object to a playable object URL.
+   */
+  loadVoice?: ((ref: VoiceAttachmentRef) => Promise<string>) | undefined
   renderMessageImages: RenderMessageImages
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
   /** Turn-process state when this Node belongs to a projected Turn. */
@@ -143,6 +148,8 @@ export interface ChatViewInjected {
   /** Jump loader: page history back through seq; resolves when the window covers it. */
   loadThrough: (seq: SessionSeq) => Promise<void>
   loadImage: MessageImageLoader
+  /** [本地改造 2026-08-16 / 0.1.5 已迁移] Durable voice object → playable URL. */
+  loadVoice?: ((ref: VoiceAttachmentRef) => Promise<string>) | undefined
   chatScroll: {
     save: (position: ChatScrollPosition | null) => void
     read: () => ChatScrollPosition | null
