@@ -109,21 +109,32 @@ function flattenText(blocks: ContentBlock[]): string {
 
 /** [本地改造 2026-08-16] 把 image 块转成含本地附件路径的文本（参考 dsh-vscode-layout 补丁）：
  * 文本模型收到路径后，调用插件自研 look_image 工具识图（默认 describe；reverse=像素级反推
- * 生图提示词；text=提取文字）。路径带扩展名（jpeg→.jpg / png→.png / webp→.png，
- * attachment-local 存储时已生成带扩展名别名，见 store.ts extensionAliasPath），
- * 保证 look_image 按 image_path 直接 readFile 可读。不依赖外部视觉 MCP。 */
+ * 生图提示词；text=提取文字）。
+ * 2026-09-10：路径改为**无扩展名**内容寻址对象路径（与 attachment-local
+ * `normalizedImagePath` 一致：objects/<2>/<64hex>）。旧版拼 `hex.jpg/png` 在
+ * 0.1.5 升级丢掉硬链接别名后必然 ENOENT。look_image 不校验扩展名，readFile 直读即可。 */
+function resolveDshHome(): string {
+  if (process.env.DSH_HOME && process.env.DSH_HOME.length > 0) return process.env.DSH_HOME
+  // nssm/LocalSystem 可能漏注入 DSH_HOME — 回落到用户目录
+  const up = process.env.USERPROFILE
+  if (up && up.length > 0) return join(up, '.dsh')
+  const home = process.env.HOME
+  if (home && home.length > 0) return join(home, '.dsh')
+  return ''
+}
+
 function imageAsText(block: ContentBlock): ContentBlock {
   const ref = (block as { attachment?: { attachmentId?: unknown; name?: string; mediaType?: string } }).attachment
   const rawId = typeof ref?.attachmentId === 'string' ? ref.attachmentId : ''
   const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
   const name = typeof ref?.name === 'string' && ref.name.length > 0 ? ref.name : 'image'
   const mediaType = ref?.mediaType ?? 'image/jpeg'
-  const home = process.env.DSH_HOME ?? ''
-  const ext = mediaType === 'image/jpeg' ? '.jpg' : '.png'
+  const home = resolveDshHome()
+  // 无扩展名 = store 真实对象路径（look_image 可读）
   const path = hex.length > 0 && home !== ''
-    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex) + ext
+    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
     : '(unknown)'
-  return { type: 'text', text: `[用户发送了一张图片，名称 "${name}"，类型 ${mediaType}，本地路径 ${path}。请调用 look_image 工具识别这张图片（image_path 参数填这个路径）：默认 describe=看图描述；用户要求像素级反推/详细复现/转成生图提示词时用 task="reverse"；要求提取图中文字时用 task="text"。]` }
+  return { type: 'text', text: `[用户发送了一张图片，名称 "${name}"，类型 ${mediaType}，本地路径 ${path}。请调用 look_image 工具识别这张图片（image_path 参数填这个路径）：默认 describe=看图描述；用户要求像素级反推/详细复现/转成生图提示词时用 task="reverse"；要求提取图中文字时用 task="text"。路径可能无扩展名，look_image 直接 readFile 即可。]` }
 }
 
 function imagesAsText(blocks: readonly ContentBlock[]): ContentBlock[] {
