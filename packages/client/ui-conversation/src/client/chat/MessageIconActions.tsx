@@ -69,7 +69,7 @@ export function MessageIconActions({
       copyPending.current = false
       if (!ok) return
       setCopied(true)
-      copyTimer.current = window.setTimeout(() => {
+      copyTimer.current = globalThis.setTimeout(() => {
         copyTimer.current = null
         setCopied(false)
       }, 1000)
