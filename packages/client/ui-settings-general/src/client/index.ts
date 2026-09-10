@@ -73,15 +73,12 @@ export function apply(ctx: ClientContext): void {
   // locale/change re-registration wiring.
   const t = ctx.locale.bind(NS)
   // The shared SettingsScope mirror updates after document commits and reconnects.
-  const documentController = ctx.remote.$host.isLoopback
-    ? new SettingsDocumentStore(ctx, ctx.settingsScope.describe())
-    : undefined
-  const documentInjected = documentController === undefined
-    ? undefined
-    : (): SettingsDocumentActionInjected => ({
-      controller: documentController,
-      hooks: { snapshot: documentController.store },
-    })
+  // [本地改造 2026-09-11] 官方非 loopback 不挂文档控制器；本地 fork 放开远程读写。
+  const documentController = new SettingsDocumentStore(ctx, ctx.settingsScope.describe())
+  const documentInjected = (): SettingsDocumentActionInjected => ({
+    controller: documentController,
+    hooks: { snapshot: documentController.store },
+  })
   ctx.effect(() => () => { documentController?.dispose() }, 'ui-settings-general: document action directory')
   // The settings shell: this package occupies the sidebar-owned hole and
   // declares the settings slots. Ledger → nav-row projection as an observable

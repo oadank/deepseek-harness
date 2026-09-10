@@ -55,7 +55,9 @@ export function apply(ctx: Context): void {
   const schema = new SettingsSchemaService(ctx)
   // Resolved once here, where `remote` is declared in this plugin's own
   // `inject`; the binder hands the same answer to every scope it binds.
-  const persistence = ctx.remote.$host.isLoopback ? 'host' : 'memory'
+  // [本地改造 2026-09-11] 官方非 loopback 强制 memory（远程只读保护）。本地 fork
+  // 内网自用 + token 鉴权，放开远程 settings 读写（手机也要管理模型/提供方）。
+  const persistence = 'host'
   const mirror = new SettingsDescribeMirror(ctx, persistence)
   ctx.effect(() => {
     const disposers = [
