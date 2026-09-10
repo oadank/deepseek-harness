@@ -138,7 +138,14 @@ function directoryEntries(
   }
   for (const provider of catalog) declare(provider, provider)
   for (const [provider, profile] of profiles) declare(provider, profile.displayName, profile.catalogError)
-  return [...entries.values()]
+  // Configured hand-declared routes (gw/qwen/…) first so Models shows them
+  // above the huge unused catalog list after 0.1.5's expanded directory.
+  const profileOrder = [...profiles.keys()]
+  const catalogOnly = [...entries.keys()].filter(id => catalog.has(id) && !profiles.has(id))
+  return [
+    ...profileOrder.map(id => entries.get(id)!),
+    ...catalogOnly.map(id => entries.get(id)!),
+  ]
 }
 
 /** Register one generic pi-ai adapter for all configured provider routes. */

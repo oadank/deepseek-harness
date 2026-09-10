@@ -198,8 +198,13 @@ export class ModelsSettingsStore {
     const namespaces = new Map(views.map(view => [view.ns, view]))
     const rows: ProviderRow[] = providers.map((entry) => {
       const namespace = namespaces.get(entry.settingsNs)
+      // configured when the effective document OR the user layer carries the path
+      // (hand-declared gw/qwen live only in the user layer after a file edit).
       const configured = namespace !== undefined
-        && (entry.settingsPath.length === 0 || this.schema.getPath(namespace.value, entry.settingsPath) !== undefined)
+        && (entry.settingsPath.length === 0
+          || this.schema.getPath(namespace.value, entry.settingsPath) !== undefined
+          || (namespace.user !== undefined
+            && this.schema.getPath(namespace.user, entry.settingsPath) !== undefined))
       const removable = namespace !== undefined
         && entry.settingsPath.length > 0
         && this.schema.hasPath(namespace.user, entry.settingsPath)
