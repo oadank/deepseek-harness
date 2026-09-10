@@ -54,7 +54,14 @@ export class WelcomeNoticeStore {
    * @param scope - the welcome settings namespace scope; its memory mode is
    * what keeps a remote browser process-local.
    */
-  constructor(private readonly scope: SettingsScope<WelcomeSection>) {}
+  constructor(private readonly scope: SettingsScope<WelcomeSection>) {
+    // [本地改造 0.1.5] 远程浏览器（tailscale 等）scope 常为 memory → ack 不落盘，
+    // 每次刷新都弹。localStorage 兜底持久化 ack 版本。
+    try {
+      const stored = globalThis.localStorage?.getItem('dsh.welcomeNoticeAck')
+      if (stored === WELCOME_NOTICE_VERSION) this.localAcknowledged = true
+    } catch { /* private mode / no storage */ }
+  }
 
   /**
    * Begin following the bound scope (idempotent) and publish its current answer.
@@ -73,6 +80,9 @@ export class WelcomeNoticeStore {
    * @returns true when the selected persistence mode holds the acknowledgement.
    */
   async acknowledge(): Promise<boolean> {
+    try {
+      globalThis.localStorage?.setItem('dsh.welcomeNoticeAck', WELCOME_NOTICE_VERSION)
+    } catch { /* ignore */ }
     if (this.scope.getSnapshot().mode === 'memory') {
       this.localAcknowledged = true
       this.derive()
@@ -125,7 +135,8 @@ export class WelcomeNoticeStore {
         })
         return
       case 'ready': {
-        const acknowledged = scope.value?.[WELCOME_NOTICE_ACK_FIELD] === WELCOME_NOTICE_VERSION
+        let acknowledged = scope.value?.[WELCOME_NOTICE_ACK_FIELD] === WELCOME_NOTICE_VERSION
+        if (!acknowledged && this.localAcknowledged) acknowledged = true
         this.store.update((state) => {
           state.status = 'ready'
           state.acknowledged = acknowledged
