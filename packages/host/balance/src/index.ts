@@ -100,15 +100,20 @@ function providerOfSession(ctx: Context, sessionId: string): string | undefined 
   const agent = agentsOf(ctx).get(sessionId)
   if (agent === undefined) return undefined
   try {
+    // [本地改造 2026-09-11] 0.1.5 投影真实语义（agent.selectionFor 同源）：
+    // pending 只在「选了还没发请求」时非空；request/header 发出后清 null，
+    // 实际生效 provider 在会话日志最后一次 request/header 的 config 里。
     const state = projectionsOf(ctx).stateOf(agent.session, 'modelSelection') as
       | { pending?: { provider?: unknown } | null }
       | undefined
     const pending = state?.pending
-    if (pending !== null && pending !== undefined && typeof pending.provider === 'string') {
+    if (pending !== null && pending !== undefined && typeof pending.provider === 'string' && pending.provider !== '') {
       return pending.provider
     }
+    const logged = agent.session.requestHeader()?.config as { provider?: unknown } | undefined
+    if (typeof logged?.provider === 'string' && logged.provider !== '') return logged.provider
   } catch {
-    // projection missing — fall through
+    // projection/log missing — fall through
   }
   return undefined
 }
