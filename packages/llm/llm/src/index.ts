@@ -230,6 +230,13 @@ export abstract class LlmAdapter {
   }
 
   /**
+   * [本地改造 2026-08-28] How this adapter wants text-only models to see images.
+   * `'path'` skips the official sha-digest projection so serialize can convert
+   * image blocks into local-path text (look_image / vision MCP).
+   */
+  readonly textImageHandling?: 'path' | 'omit' = undefined
+
+  /**
    * List models this adapter can currently advertise for one owned provider.
    * The result is advisory: an adapter may accept unlisted model ids, and
    * consumers must not turn absence into request rejection.
@@ -1047,6 +1054,7 @@ export class LlmRuntime extends TypertRemoteService {
       }
       if (modelInfo.inputModalities !== undefined
         && !modelInfo.inputModalities.includes('image')
+        && adapter.textImageHandling !== 'path'
         && projectedMessages.some(message => contentHasImage(message.content))) {
         projectedMessages = projectImagesForTextModel(projectedMessages)
       }
