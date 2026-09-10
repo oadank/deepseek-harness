@@ -17,6 +17,7 @@ describe('provider retry policy', () => {
       initialDelayMs: 500,
       maxDelayMs: 10_000,
       jitterRatio: 0.1,
+      codes: {},
     })
     expect(Object.isFrozen(policy)).toBe(true)
     if (policy.mode !== 'normal') throw new Error('expected normal policy')
@@ -43,6 +44,7 @@ describe('provider retry policy', () => {
       mode: 'normal',
       maxRetries: 4,
       retryableCodes: ['BUSY'],
+      codes: {},
       initialDelayMs: 25,
       maxDelayMs: 100,
       jitterRatio: 0,

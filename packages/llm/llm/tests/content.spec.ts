@@ -355,13 +355,13 @@ describe('projectImagesForTextModel', () => {
     expect(projected[0]).toBe(plain)
     expect(projected[1]?.content).toEqual([
       { type: 'text', text: 'lead' },
-      { type: 'text', text: '[image omitted because this model accepts text only; attachment sha256:aaaaaaaa]' },
+      { type: 'text', text: '[image omitted because this model accepts text only; attachment sha256:aaaaaaaa; 本地文件路径 C:\\Users\\oadan/.dsh/attachments/v1/objects/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa（无扩展名内容寻址对象，直接以 image_path 参数调用 look_image 工具识图：默认 describe=看图描述；要求像素级反推用 task=\"reverse"\；提取图中文字用 task=\"text"\。路径可能无扩展名，直接 readFile 即可。）]' },
       unchangedNested,
       {
         ...nested,
         content: [
           { type: 'text', text: 'before' },
-          { type: 'text', text: '[image omitted because this model accepts text only; attachment sha256:aaaaaaaa]' },
+          { type: 'text', text: '[image omitted because this model accepts text only; attachment sha256:aaaaaaaa; 本地文件路径 C:\\Users\\oadan/.dsh/attachments/v1/objects/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa（无扩展名内容寻址对象，直接以 image_path 参数调用 look_image 工具识图：默认 describe=看图描述；要求像素级反推用 task=\"reverse"\；提取图中文字用 task=\"text"\。路径可能无扩展名，直接 readFile 即可。）]' },
           { type: 'text', text: 'after' },
         ],
       },

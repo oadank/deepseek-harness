@@ -1063,7 +1063,7 @@ describe('LlmRuntime', () => {
     expect(waterfall[0]?.messages[0]?.content).toEqual([{ type: 'image', attachment }])
     expect(seen[0]?.messages[0]?.content).toEqual([{
       type: 'text',
-      text: '[image omitted because this model accepts text only; attachment sha256:aaaaaaaa]',
+      text: '[image omitted because this model accepts text only; attachment sha256:aaaaaaaa; 本地文件路径 C:\\Users\\oadan/.dsh/attachments/v1/objects/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa（无扩展名内容寻址对象，直接以 image_path 参数调用 look_image 工具识图：默认 describe=看图描述；要求像素级反推用 task=\"reverse"\；提取图中文字用 task=\"text"\。路径可能无扩展名，直接 readFile 即可。）]',
     }])
 
     const frozen = Object.freeze({
