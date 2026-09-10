@@ -52,7 +52,13 @@ function decodeBase64Url(value: string): Buffer | undefined {
 function processLaunchToken(owner: object): string {
   const existing = PROCESS_LAUNCH_TOKENS.get(owner)
   if (existing !== undefined) return existing
-  const created = encodeBase64Url(randomBytes(SECRET_BYTES))
+  // [本地改造 0.1.5] 静态登录 token：设 DSH_WEB_TOKEN 后重启仍用同一 URL。
+  // 不影响 trust 栅栏（trustedHosts / Host/Origin / cookie 签名）——只是把
+  // 随机 process token 换成部署方固定的值，便于 tailscale 收藏链接。
+  const fixed = process.env.DSH_WEB_TOKEN
+  const created = typeof fixed === 'string' && fixed.length >= 16
+    ? fixed
+    : encodeBase64Url(randomBytes(SECRET_BYTES))
   PROCESS_LAUNCH_TOKENS.set(owner, created)
   return created
 }
