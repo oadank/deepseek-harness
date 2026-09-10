@@ -1,24 +1,32 @@
 /**
- * Host plugin: authenticated Edge TTS synthesis route on the Connection
- * shared API channel. Replaces the retired apiproxy `voice.tts` unary path
- * with a Connection Fetch route (same pattern as session.log export).
+ * Host plugin: Edge TTS Fetch routes plus automatic assistant voice-reply.
+ * Replaces retired apiproxy voice.tts / sendVoiceMessage host duties for the
+ * durable voice/reply path.
  * @module @deepseek-ai/dsh-host-edge-tts
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { DEFAULT_EDGE_TTS_VOICE, edgeTts } from './edge-tts.ts'
+import { synthesizeReplyVoice } from './synthesize.ts'
+import { saveVoiceFile, voiceStorageRoot } from './voice-store.ts'
 
 export const name = 'edge-tts'
-/** Connection is required to register the Fetch routes; Cordis rejects ctx.connection without this inject. */
-export const inject = ['connection']
+/** Connection for Fetch routes; agents for turn-end voice-reply. */
+export const inject = ['connection', 'agents']
 
 /** Authenticated browser path for one synthesis request. */
 export const EDGE_TTS_PATH = '/api/edge-tts'
 /** Authenticated browser path for reading one stored voice object. */
 export const VOICE_READ_PATH = '/api/voice'
+
+/** Default max characters spoken for one auto voice reply. */
+const MAX_REPLY_CHARS = 800
+/** Minimum speakable characters after markdown strip. */
+const MIN_REPLY_CHARS = 2
 
 /** JSON body of one synthesis request. */
 interface EdgeTtsRequestBody {
@@ -37,20 +45,46 @@ interface ConnectionFetchHost {
   }
 }
 
+interface AgentsHost {
+  get(id: string): { session: Session } | undefined
+}
+
 function connectionOf(ctx: Context): ConnectionFetchHost {
   return Reflect.get(ctx, 'connection') as ConnectionFetchHost
 }
 
-function voiceObjectPath(voiceId: string): string {
+function agentsOf(ctx: Context): AgentsHost {
+  return Reflect.get(ctx, 'agents') as AgentsHost
+}
+
+function voicePathOf(voiceId: string): string {
   const sha = voiceId.replace(/^sha256:/, '')
   if (!/^[0-9a-f]{64}$/i.test(sha)) throw new Error('invalid voiceId')
   const home = process.env.DSH_HOME ?? join(homedir(), '.dsh')
   return join(home, 'attachments', 'v1', 'objects', sha.slice(0, 2), sha)
 }
 
+function assistantTextOf(content: readonly unknown[]): string {
+  const parts: string[] = []
+  for (const block of content) {
+    const b = block as { type?: unknown; text?: unknown }
+    if (b?.type === 'text' && typeof b.text === 'string') parts.push(b.text)
+  }
+  return parts.join('').trim()
+}
+
+/** Pending assistant text per session for the current turn. */
+const pendingReply = new Map<string, { turn: number; text: string }>()
+
+function voiceReplyEnabled(): boolean {
+  const v = process.env.DSH_VOICE_REPLY
+  // Default on; DSH_VOICE_REPLY=0 disables.
+  return v !== '0' && v?.toLowerCase() !== 'false'
+}
+
 /**
- * Register synthesis and voice-object read routes on the shared API channel.
- * @param ctx - Host context carrying Connection Fetch.
+ * Register synthesis/read routes and automatic voice-reply on completed turns.
+ * @param ctx - Host context carrying Connection and Agents.
  */
 export function apply(ctx: Context): void {
   const connection = connectionOf(ctx)
@@ -64,7 +98,7 @@ export function apply(ctx: Context): void {
         return new Response('missing voiceId', { status: 400 })
       }
       try {
-        const data = await readFile(voiceObjectPath(voiceId))
+        const data = await readFile(voicePathOf(voiceId))
         if (request.method === 'HEAD') {
           return new Response(null, {
             status: 200,
@@ -119,11 +153,63 @@ export function apply(ctx: Context): void {
           },
         })
       } catch {
-        // Endpoint and error text stay off the wire; the browser shows a generic failure.
         return new Response('edge tts synthesis failed', { status: 502 })
       }
     },
   })
+
+  ctx.on('session/event', (session: Session, event: SessionEvent) => {
+    if (!voiceReplyEnabled()) return
+    switch (event.type) {
+      case 'assistant/message': {
+        if (event.data.interrupted === true) return
+        const text = assistantTextOf(event.data.message.content)
+        if (text.length >= MIN_REPLY_CHARS) {
+          pendingReply.set(session.id, { turn: event.data.turn, text })
+        }
+        return
+      }
+      case 'turn/end': {
+        if (event.data.reason.kind !== 'completed' && event.data.reason.kind !== 'max-tokens') return
+        const pending = pendingReply.get(session.id)
+        pendingReply.delete(session.id)
+        if (pending === undefined || pending.turn !== event.data.turn) return
+        if (pending.text.length > MAX_REPLY_CHARS) return
+        // Fire-and-forget: never block the loop teardown on TTS.
+        void (async () => {
+          try {
+            const audio = await synthesizeReplyVoice(pending.text)
+            if (audio === null) return
+            const ref = await saveVoiceFile(
+              voiceStorageRoot(),
+              audio.data,
+              audio.mediaType,
+              audio.durationMs,
+              pending.text,
+            )
+            // Only append if this session is still live on the same agent tree.
+            const live = agentsOf(ctx).get(session.id)
+            if (live === undefined || live.session !== session) return
+            session.append('voice/reply', {
+              turn: pending.turn,
+              voiceId: ref.voiceId,
+              mediaType: ref.mediaType,
+              bytes: ref.bytes,
+              ...(ref.durationMs === undefined ? {} : { durationMs: ref.durationMs }),
+              transcript: ref.transcript ?? pending.text,
+            })
+          } catch {
+            // Synthesis/storage failure must never crash the host loop.
+          }
+        })()
+        return
+      }
+      default:
+        return
+    }
+  })
 }
 
 export { DEFAULT_EDGE_TTS_VOICE, EDGE_TTS_MAX_ATTEMPTS, EDGE_TTS_MESSAGE_TIMEOUT_MS, edgeTts } from './edge-tts.ts'
+export { saveVoiceFile, voiceObjectPath, voiceStorageRoot, type VoiceObjectRef } from './voice-store.ts'
+export { stripMarkdown, synthesizeReplyVoice, type SynthesizedVoice } from './synthesize.ts'
