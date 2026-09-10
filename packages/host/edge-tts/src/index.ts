@@ -12,7 +12,8 @@ import { join } from 'node:path'
 import { DEFAULT_EDGE_TTS_VOICE, edgeTts } from './edge-tts.ts'
 
 export const name = 'edge-tts'
-export const inject: string[] = []
+/** Connection is required to register the Fetch routes; Cordis rejects ctx.connection without this inject. */
+export const inject = ['connection']
 
 /** Authenticated browser path for one synthesis request. */
 export const EDGE_TTS_PATH = '/api/edge-tts'
