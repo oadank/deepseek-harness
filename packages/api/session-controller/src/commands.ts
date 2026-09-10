@@ -335,17 +335,9 @@ export class SessionCommandController {
     const hasImage = request.content.some(part => part.type === 'image')
     const admit = async (): Promise<SessionPromptValue> => {
       try {
-        if (hasImage) {
-          const current = this.agents.selectionFor(agent).current
-          const model = await this.ctx.llm.resolveModelInfo(current.provider, current.model)
-          if (model.inputModalities !== undefined && !model.inputModalities.includes('image')) {
-            throw new RemoteError(
-              'session/attachment-invalid',
-              `Model "${current.model}" does not support image input.`,
-              { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
-            )
-          }
-        }
+        // [本地改造 0.1.5] 不再因模型缺 image 模态拒绝发图：serialize 侧
+        // textImageHandling='path' 会把图转本地路径文本，由视觉 MCP 消费。
+        void hasImage
         const admission = resolvePromptFileReceipts(
           request.content,
           receiptId => this.ctx.fileUploads.resolve(agent, receiptId),
