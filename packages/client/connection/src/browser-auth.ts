@@ -235,6 +235,11 @@ export class BrowserAuth {
     return url.href
   }
 
+  /** [本地改造 2026-09-10] 相对形态的带 token 首页 URL（manifest start_url 用）。 */
+  indexRelativeUrl(): string {
+    return `/?${TOKEN_QUERY}=${encodeURIComponent(this.launchToken)}`
+  }
+
   /**
    * Authenticate an index request. A valid root query token mints the cookie
    * and redirects to clean `/`; a valid cookie lets the caller serve the
@@ -246,6 +251,35 @@ export class BrowserAuth {
   authorizeIndex(req: ConnectionIndexRequest, res: ConnectionIndexResponse): boolean {
     /* v8 ignore next -- node:http always supplies url on server requests. */
     const url = new URL(req.url ?? '/', 'http://dsh.invalid')
+    // [本地改造 2026-09-10] 路径式登录：GET /t/<token> —— iOS 主屏 PWA 会丢 query，
+    // token 放路径段不受影响；命中即铸 cookie 303 回 /，不匹配 401。
+    const pathToken = /^\/t\/([A-Za-z0-9_-]+)$/.exec(url.pathname)
+    if (pathToken !== null && req.method === 'GET') {
+      const authority = requestAuthority(req.headers)
+      const supplied = decodeURIComponent(pathToken[1] ?? '')
+      if (authority !== undefined && tokenMatches(supplied, this.launchToken)) {
+        const issuedAt = Date.now()
+        const expiresAt = issuedAt + this.maxAgeMilliseconds
+        const value = encodeCookie({
+          version: COOKIE_PAYLOAD_VERSION,
+          authority,
+          issuedAt,
+          expiresAt,
+        }, this.secret)
+        res.writeHead(303, {
+          'cache-control': 'no-store',
+          'location': '/',
+          'referrer-policy': 'no-referrer',
+          'set-cookie': sessionCookie(
+            cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000),
+          ),
+        })
+        res.end()
+        return false
+      }
+      this.writeUnauthorized(req, res)
+      return false
+    }
     const tokens = url.searchParams.getAll(TOKEN_QUERY)
     if (tokens.length > 0) {
       const authority = requestAuthority(req.headers)

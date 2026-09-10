@@ -72,9 +72,27 @@ function normalizedAccessText(ref: ImageAttachmentRef, access: ImageAttachmentAc
  * @param ref - durable normalized attachment omitted from the request.
  * @returns deterministic text-only placeholder.
  */
+/** [本地改造 2026-09-10] 解析 DSH 附件主目录（nssm 场景 env 可能缺项，逐级回落）。 */
+function dshHomeDir(): string {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
+  const dsh = env?.DSH_HOME
+  if (dsh !== undefined && dsh.length > 0) return dsh.replace(/[\/]+$/, '')
+  const up = env?.USERPROFILE ?? env?.HOME
+  return up !== undefined && up.length > 0 ? up.replace(/[\/]+$/, '') + '/.dsh' : ''
+}
+
 export function textOnlyImageText(ref: ImageAttachmentRef): string {
-  const digest = String(ref.attachmentId).slice('sha256:'.length, 'sha256:'.length + 8)
-  return `[image omitted because this model accepts text only; attachment sha256:${digest}]`
+  const full = String(ref.attachmentId)
+  const hex = full.startsWith('sha256:') ? full.slice('sha256:'.length) : full
+  const digest = hex.slice(0, 8)
+  const home = dshHomeDir()
+  const objectPath = home !== '' && hex.length === 64
+    ? `${home}/attachments/v1/objects/${hex.slice(0, 2)}/${hex}`
+    : undefined
+  const head = `[image omitted because this model accepts text only; attachment sha256:${digest}`
+  return objectPath === undefined
+    ? `${head}]`
+    : `${head}; 本地文件路径 ${objectPath}（无扩展名内容寻址对象，直接以 image_path 参数调用 look_image 工具识图：默认 describe=看图描述；要求像素级反推用 task="reverse"；提取图中文字用 task="text"。路径可能无扩展名，直接 readFile 即可。）]`
 }
 
 /**

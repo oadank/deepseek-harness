@@ -197,6 +197,12 @@ export interface HostConnectionHandle {
    * @returns root URL accepted by {@link authorizeIndex} for initial login.
    */
   authenticatedUrl(baseUrl: string): string
+
+  /**
+   * [本地改造 2026-09-10] 相对形态的带 token 首页 URL（manifest start_url 注入用）。
+   * @returns '/?token=<process token>'。
+   */
+  indexRelativeUrl(): string
 }
 
 /** Transport-independent Fetch handler used by HTTP and worker carriers. */
