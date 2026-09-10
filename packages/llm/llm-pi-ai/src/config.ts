@@ -13,7 +13,7 @@
  * @module dsh-llm-pi-ai/config
  */
 
-import type { CacheRetention, ChatTemplateKwargValue, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
+import type { Api, CacheRetention, ChatTemplateKwargValue, Model, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
@@ -207,6 +207,12 @@ export interface ResolvedPiAiProviderProfile
   piProvider?: Provider
   /** First model diagnostic, or the route failure when no model diagnostic is available. */
   catalogError?: string
+  /**
+   * Materialized serviceable models from the catalog resolution. Survives a
+   * failed `piProvider` build so the advisory selector can still list them
+   * (listModels) even when streaming cannot.
+   */
+  serviceableModels: readonly Model<Api>[]
   /** Per-model failures reported before attempting a request. */
   modelErrors: ReadonlyMap<string, string>
   /**
@@ -498,6 +504,7 @@ export function resolveProfiles(
       ...rest.thinkingBudgets === undefined ? {} : { thinkingBudgets: { ...rest.thinkingBudgets } },
       configuredMaxTokens: catalog?.configuredMaxTokens ?? new Map(),
       modelErrors: catalog?.modelErrors ?? new Map(),
+      serviceableModels: catalog?.models ?? [],
       ...piProvider === undefined ? {} : { piProvider },
       ...catalogError === undefined ? {} : { catalogError },
     })

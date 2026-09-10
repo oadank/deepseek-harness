@@ -276,8 +276,13 @@ export class PiAiAdapter extends LlmAdapter {
   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     return Promise.resolve().then(() => {
       const snapshot = this.current()
-      this.profileOf(snapshot, provider)
-      return snapshot.models.getModels(provider).map(model => ({
+      const profile = this.profileOf(snapshot, provider)
+      // Prefer the profile's materialized catalog: advisory listing must not
+      // depend on a successfully constructed piProvider (empty list otherwise).
+      const models = profile.serviceableModels.length > 0
+        ? profile.serviceableModels
+        : snapshot.models.getModels(provider)
+      return models.map(model => ({
         provider,
         id: model.id,
         name: model.name,
