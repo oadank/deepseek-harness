@@ -32,7 +32,9 @@ export interface DirectoryPickerHostFacts {
   bindHost: HttpServerConfig['host']
   /** Host process platform. */
   platform: NodeJS.Platform
-  /** Environment sample; SSH marks a remote operator, DISPLAY/WAYLAND_DISPLAY a Linux display. */
+  /** SSH launch fact from the inherited process layer, independent of `.env` values. */
+  ssh: boolean
+  /** Environment sample; DISPLAY/WAYLAND_DISPLAY marks a Linux display. */
   env: DirectoryPickerEnv
   /** Whether a Linux chooser binary the native backend can drive (zenity/kdialog) is on PATH; consulted only when `platform` is linux. */
   linuxChooser: boolean
@@ -62,7 +64,7 @@ export function resolveDirectoryPickerBackend(facts: DirectoryPickerHostFacts): 
   // 弹不出（pick 卡死）。browse 是纯 HTTP 目录列表，session 0 完全可用。
   if (facts.env.DSH_FORCE_BROWSE_PICKER === '1') return 'browse'
   if (facts.bindHost !== '127.0.0.1') return 'browse'
-  if (present(facts.env.SSH_CONNECTION) || present(facts.env.SSH_TTY)) return 'browse'
+  if (facts.ssh) return 'browse'
   // [本地改造 2026-08-23] win32 默认回落 browse：绝大多数 Windows 部署是 nssm 服务
   // （session 0 弹不出原生对话框），网页目录树对本地/远程都可用，开箱即用不再踩坑。
   // 需要原生弹窗的桌面用户显式设 DSH_FORCE_NATIVE_PICKER=1。

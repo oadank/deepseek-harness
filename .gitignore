@@ -11,6 +11,7 @@ examples/*/*.jsonl
 .sessions/
 examples/*/.sessions/
 coverage/
+.coverage-times.json
 .doc-typecheck-*/
 .node-next-types-*/
 .oxlint-contract-*/
@@ -26,10 +27,13 @@ tmp/
 .idea
 mise.toml
 dist-exe/
-python/sdk-runtime/src/deepseek_harness_runtime/runtime/dsh-jsonrpc-agent-*
+/dist/
+apps/desktop/.desktop-build/
+python/sdk-runtime/src/deepseek_harness_runtime/runtime/deepseek-harness-sdk-runtime-*
 python/sdk-runtime/src/deepseek_harness_runtime/runtime/node/
 python/**/__pycache__/
 python/**/.pytest_cache/
+packages/**/__pycache__/
 apps/web/dist/
 .artifacts/
 .dsh-build/
@@ -39,13 +43,4 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
-
-# 本机误创建的会话数据副本，绝不推送
-Usersoadan.dshdsh-botsessions/
-
-# 内置插件的 lib 是源码（非构建产物），必须入库
-!internal-plugins/dsh-input-tools/lib/
-!internal-plugins/dsh-input-tools/lib/*
-
-# 本机改动备份，绝不推送
-*.bak-*
+native/system/test/bin/
