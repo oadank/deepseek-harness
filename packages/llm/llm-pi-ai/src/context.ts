@@ -17,6 +17,7 @@ import type {
 import type { Context as PiContext, ImageContent, Message as PiMessage, TextContent, Tool as PiTool } from '@earendil-works/pi-ai'
 import { toPiAssistant } from './replay.ts'
 import { DEFAULT_REQUEST_IMAGE_MAX_BYTES, DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET } from './config.ts'
+import { join } from 'node:path'
 
 /** Join the text blocks of a harness message. */
 function flattenText(message: Message): string {
@@ -32,6 +33,30 @@ function toolResultText(blocks: readonly ContentBlock[]): string {
   return blocks.map(block => block.type === 'text'
     ? block.text
     : block.type === 'tool-result' ? toolResultText(block.content) : '').join('')
+}
+
+/**
+ * [本地改造 2026-09-11 / 抄自 llm-deepseek serialize.ts voiceAsText] Voice 块转文本：
+ * transcript 存在时直接给出识别文本；否则输出本地语音对象路径——agent 收到路径后
+ * 主动调本地 ASR 服务识别（与图片走视觉 MCP 同一模式）。pi-ai 承载 gw/ark/litellm
+ * 等 openai-completions 路由，缺此分支 voice 块被静默丢弃，AI 收不到语音内容。
+ */
+function voiceBlockText(block: Extract<ContentBlock, { type: 'voice' }>): TextContent {
+  const rawId = block.attachment.voiceId
+  const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
+  const durationMs = typeof block.attachment.durationMs === 'number' ? block.attachment.durationMs : null
+  const duration = durationMs === null ? '' : `（时长 ${Math.round(durationMs / 1000)} 秒）`
+  const transcript = typeof block.attachment.transcript === 'string' && block.attachment.transcript.length > 0
+    ? block.attachment.transcript
+    : null
+  if (transcript !== null) {
+    return { type: 'text', text: `[用户发送了一条语音${duration}，识别内容：${transcript}]` }
+  }
+  const home = process.env.DSH_HOME ?? ''
+  const path = hex.length > 0 && home !== ''
+    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
+    : '(unknown)'
+  return { type: 'text', text: `[用户发送了一条语音${duration}，本地语音文件路径: ${path}]` }
 }
 
 /** Reject image roles that pi-ai cannot replay before request-size offloading can replace them. */
@@ -79,6 +104,10 @@ async function userContent(
             content.push(...nested)
           }
         }
+        break
+      case 'voice':
+        // [本地改造 2026-09-11] 与 llm-deepseek serialize 同款降级：转写或本地对象路径文本。
+        content.push(voiceBlockText(block))
         break
       default:
         // Other merge-extensible blocks are not user-input vocabulary for pi-ai.
@@ -193,7 +222,13 @@ function textOnlyContext(options: GenerateOptions, onReplayDegrade?: (reason: st
       appendAssistant(message, messages, toolNames, onReplayDegrade)
       continue
     }
-    const text = flattenText(message)
+    // [本地改造 2026-09-11] voice 感知文本拼接：无图路径也要把 voice 块转成
+    // 「识别内容/本地路径」文本（此前 flattenText 只取 text，语音内容被静默丢弃）。
+    const text = message.content.map((block) => {
+      if (block.type === 'text') return block.text
+      if (block.type === 'voice') return voiceBlockText(block).text
+      return ''
+    }).join('')
     const results = message.content.filter(block => block.type === 'tool-result')
     if (text.length > 0 || results.length === 0) messages.push({ role: 'user', content: text, timestamp: 0 })
     for (const result of results) {
