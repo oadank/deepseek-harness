@@ -123,7 +123,7 @@ describe('ReasoningRow', () => {
         renderMessageImages={renderMessageImages}
       />,
     )
-    fireEvent.click(view.getByText('Think'))
+    fireEvent.click(view.getByText('思考'))
     const body = view.container.querySelector('[class*="thinkBody"]') as HTMLDivElement
     expect(body).not.toBeNull()
     Object.defineProperties(body, {

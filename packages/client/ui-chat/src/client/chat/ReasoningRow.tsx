@@ -1,5 +1,5 @@
 /** Assistant reasoning disclosure, independent of Tool-call presentation. */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DisclosureRow, IconThinkOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
 import a11yCss from './accessibility.module.css'
@@ -27,7 +27,15 @@ function latestLine(text: string): string {
  */
 export function ReasoningRow({ text, running, t }: { text: string; running: boolean; t: ChatViewSlotProps['t'] }) {
   const [expanded, setExpanded] = useState(false)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const summary = (running ? latestLine(text) : firstLine(text)).replaceAll('**', '')
+  // [抄自 pre-merge ReasoningRow 2026-09-11] 展开体有高度上限；流式期间保持钉在底部，
+  // 新到达的思考内容不会沉到折叠线以下。流结束不再动滚动位置（保留读者所在处）。
+  useEffect(() => {
+    if (!running || !expanded) return
+    const element = bodyRef.current
+    if (element !== null) element.scrollTop = element.scrollHeight
+  }, [running, expanded, text])
 
   return (
     <div
@@ -57,7 +65,7 @@ export function ReasoningRow({ text, running, t }: { text: string; running: bool
           </>
         )}
       >
-        <div className={css.thinkBody}>{text}</div>
+        <div ref={bodyRef} className={css.thinkBody}>{text}</div>
       </DisclosureRow>
     </div>
   )
