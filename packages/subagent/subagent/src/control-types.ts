@@ -6,7 +6,7 @@
  * @module @deepseek-ai/dsh-subagent/control-types
  */
 
-import type { PromptContentPart } from '@deepseek-ai/dsh-attachment/types'
+import type { PromptContentPart, VoiceAdmissionRef } from '@deepseek-ai/dsh-attachment/types'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -108,8 +108,10 @@ export interface SubagentPromptRequest {
    * Browser prompt parts delivered as the child's user message. The Host
    * admits and persists image parts before delivery, so the wire never
    * carries a durable attachment reference the caller could fabricate.
+   * [本地改造 2026-09-11] voice 引用块与 session 契约同步放行（transcript
+   * 已随引用携带，形状 = VoiceAdmissionRef）。
    */
-  readonly content: readonly PromptContentPart[]
+  readonly content: readonly (PromptContentPart | { readonly type: 'voice'; readonly attachment: VoiceAdmissionRef })[]
   /** Optional browser zone sampled for this exact human prompt. */
   readonly clientTimeZone?: string
 }
