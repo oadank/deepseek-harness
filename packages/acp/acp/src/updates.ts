@@ -18,6 +18,10 @@ export async function assistantUpdates(
   session: Session,
   event: SessionEvent<'assistant/message'>,
 ): Promise<SessionUpdate[]> {
+  // [本地改造 2026-09-11] 0.1.1 fork 改造延续：usage 透传到 _meta（ACP 标准扩展点）。
+  // agents-to-feishu bridge 从 agent_message_chunk._meta.usage 收缓存命中/上下文口径
+  // 落盘 stats jsonl；0.1.5 迁移时丢失 → bridge 断更。字段缺省补 0 避免 NaN。
+  const usageMeta = usageMetaOf(event)
   const updates: SessionUpdate[] = []
   for (const block of event.data.message.content) {
     if (block.type === 'reasoning') {
@@ -36,12 +40,36 @@ export async function assistantUpdates(
         sessionUpdate: 'agent_message_chunk',
         messageId: event.data.message.id,
         content,
+        ...(usageMeta === undefined ? {} : { _meta: usageMeta }),
       })
     }
   }
   const usage = usageUpdate(ctx, session, event)
   if (usage !== undefined) updates.push(usage)
   return updates
+}
+
+/** Map the committed message's TokenUsage onto the bridge's _meta usage face. */
+function usageMetaOf(event: SessionEvent<'assistant/message'>): {
+  usage: {
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    reasoningTokens: number
+  }
+} | undefined {
+  const u = event.data.usage
+  if (u === undefined) return undefined
+  return {
+    usage: {
+      inputTokens: u.inputTokens ?? 0,
+      outputTokens: u.outputTokens ?? 0,
+      cacheReadTokens: u.cacheReadTokens ?? 0,
+      cacheWriteTokens: u.cacheWriteTokens ?? 0,
+      reasoningTokens: u.reasoningTokens ?? 0,
+    },
+  }
 }
 
 /**
@@ -72,15 +100,22 @@ export async function toolResultUpdate(
 ): Promise<SessionUpdate> {
   const result = event.data.message.content[0]
   const content: ToolCallContent[] = []
+  // [本地改造 2026-09-11] 同步收集原始文本（≤2000 字符）到 rawOutput：0.1.1 fork 行为，
+  // agents-to-feishu 桥接靠它捕获 send_voice 的 voiceId 投递语音；0.1.5 重写时丢失。
+  let rawOutput: string | undefined
   for (const block of result.content) {
     const converted = await assistantBlockToAcp(ctx, block)
     if (converted !== undefined) content.push({ type: 'content' as const, content: converted })
+    if (rawOutput === undefined && block.type === 'text' && block.text.length > 0) {
+      rawOutput = block.text.length > 2000 ? block.text.slice(0, 2000) : block.text
+    }
   }
   return {
     sessionUpdate: 'tool_call_update',
     toolCallId: result.toolCallId,
     status: result.isError === true ? 'failed' : 'completed',
     content,
+    ...(rawOutput === undefined ? {} : { rawOutput }),
   }
 }
 

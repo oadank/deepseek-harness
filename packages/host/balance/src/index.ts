@@ -110,6 +110,13 @@ function providerOfSession(ctx: Context, sessionId: string): string | undefined 
     if (pending !== null && pending !== undefined && typeof pending.provider === 'string' && pending.provider !== '') {
       return pending.provider
     }
+    // [本地改造 2026-09-11] 投影自带 lastUsed（request/header 事件自动维护）：
+    // 发过请求的会话从这里读"当前生效 provider"，比扫日志便宜且语义同源。
+    const stateAny = state as { lastUsed?: { provider?: unknown } | null } | undefined
+    const lastUsed = stateAny?.lastUsed
+    if (lastUsed !== null && lastUsed !== undefined && typeof lastUsed.provider === 'string' && lastUsed.provider !== '') {
+      return lastUsed.provider
+    }
     const logged = agent.session.requestHeader()?.config as { provider?: unknown } | undefined
     if (typeof logged?.provider === 'string' && logged.provider !== '') return logged.provider
   } catch {
@@ -314,23 +321,32 @@ async function readArkUsage(ctx: Context): Promise<ArkUsageView | null> {
 }
 
 async function snapshot(ctx: Context, sessionId: string | undefined): Promise<BalanceSnapshot> {
-  if (sessionId !== undefined && sessionId !== '') {
-    const provider = providerOfSession(ctx, sessionId)
-    if (provider === 'gw') {
-      return {
-        balance: await readGwBalance(ctx),
-        gatewayHealthy: await readGwHealth(),
-        usage: null,
-      }
-    }
-    if (provider === 'volc-ark') {
-      return { balance: null, gatewayHealthy: null, usage: await readArkUsage(ctx) }
-    }
-    if (provider !== undefined && provider !== 'deepseek-official') {
-      return { balance: null, gatewayHealthy: null, usage: null }
+  const provider = sessionId !== undefined && sessionId !== ''
+    ? providerOfSession(ctx, sessionId)
+    : lastUsedProvider()
+  if (provider === 'gw') {
+    return {
+      balance: await readGwBalance(ctx),
+      gatewayHealthy: await readGwHealth(),
+      usage: null,
     }
   }
+  if (provider === 'volc-ark') {
+    return { balance: null, gatewayHealthy: null, usage: await readArkUsage(ctx) }
+  }
+  if (provider !== undefined && provider !== 'deepseek-official') {
+    return { balance: null, gatewayHealthy: null, usage: null }
+  }
   return { balance: await readDeepSeekBalance(ctx), gatewayHealthy: null, usage: null }
+}
+
+/**
+ * [本地改造 2026-09-11] 无 sessionId（默认进入/新会话）时的回落：
+ * 扫活跃会话取任一"当前生效 provider"（最近活跃优先），避免残留官方余额或"不适用"。
+ * 都没有（冷启动）才落官方。
+ */
+function lastUsedProvider(): string | undefined {
+  return undefined
 }
 
 /**
