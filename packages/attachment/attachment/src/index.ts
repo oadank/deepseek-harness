@@ -116,13 +116,17 @@ export abstract class AttachmentStore extends Service {
     if (content.every(part => part.type !== 'image')) {
       return content.map(part => part.type === 'text'
         ? { type: 'text', text: part.text }
-        : { type: 'file', attachment: part.attachment })
+        : part.type === 'voice'
+          // [本地改造 2026-09-11] voice 引用已由 voice save 端点落对象池，这里原样透传。
+          ? { type: 'voice', attachment: part.attachment }
+          : { type: 'file', attachment: part.attachment })
     }
     const refs = await admitEncodedImages(this, content.filter(part => part.type === 'image'))
     let next = 0
     return content.map((part) => {
       if (part.type === 'text') return { type: 'text', text: part.text }
       if (part.type === 'file') return { type: 'file', attachment: part.attachment }
+      if (part.type === 'voice') return { type: 'voice', attachment: part.attachment }
       return { type: 'image', attachment: refs[next++] as ImageAttachmentRef }
     })
   }
