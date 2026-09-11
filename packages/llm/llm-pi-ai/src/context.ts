@@ -41,6 +41,17 @@ function toolResultText(blocks: readonly ContentBlock[]): string {
  * 主动调本地 ASR 服务识别（与图片走视觉 MCP 同一模式）。pi-ai 承载 gw/ark/litellm
  * 等 openai-completions 路由，缺此分支 voice 块被静默丢弃，AI 收不到语音内容。
  */
+/** [本地改造 2026-09-11] DSH home 解析：nssm/ACP spawn 的进程可能漏注入 DSH_HOME，
+ * 与 llm-deepseek serialize.ts resolveDshHome 同一回落链（DSH_HOME → USERPROFILE/.dsh → HOME/.dsh）。 */
+function resolveDshHome(): string {
+  if (process.env.DSH_HOME && process.env.DSH_HOME.length > 0) return process.env.DSH_HOME
+  const up = process.env.USERPROFILE
+  if (up && up.length > 0) return join(up, '.dsh')
+  const home = process.env.HOME
+  if (home && home.length > 0) return join(home, '.dsh')
+  return ''
+}
+
 function voiceBlockText(block: Extract<ContentBlock, { type: 'voice' }>): TextContent {
   const rawId = block.attachment.voiceId
   const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
@@ -52,7 +63,7 @@ function voiceBlockText(block: Extract<ContentBlock, { type: 'voice' }>): TextCo
   if (transcript !== null) {
     return { type: 'text', text: `[用户发送了一条语音${duration}，识别内容：${transcript}]` }
   }
-  const home = process.env.DSH_HOME ?? ''
+  const home = resolveDshHome()
   const path = hex.length > 0 && home !== ''
     ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
     : '(unknown)'

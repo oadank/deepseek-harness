@@ -160,7 +160,7 @@ function voiceAsText(block: ContentBlock): ContentBlock {
   if (transcript !== null) {
     return { type: 'text', text: `[用户发送了一条语音${duration}，识别内容：${transcript}]` }
   }
-  const home = process.env.DSH_HOME ?? ''
+  const home = resolveDshHome()
   const path = hex.length > 0 && home !== ''
     ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
     : '(unknown)'
