@@ -58,6 +58,6 @@
     "@deepseek-ai/dsh-system-prompt": "workspace:^",
     "@types/js-yaml": "^4.0.9",
     "@deepseek-ai/cordis": "workspace:^",
-    "chokidar": "4.0.3"
+    "chokidar": "5.0.0"
   }
 }
