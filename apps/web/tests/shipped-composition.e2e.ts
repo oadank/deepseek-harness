@@ -525,6 +525,7 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
   await index.body?.cancel()
   expect(ctx.llm.providerRetryPolicy('deepseek-official')).toMatchInlineSnapshot(`
     {
+      "codes": {},
       "initialDelayMs": 500,
       "jitterRatio": 0.1,
       "maxDelayMs": 10000,
@@ -558,6 +559,7 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
   })
   expect(ctx.llm.providerRetryPolicy('openai')).toMatchInlineSnapshot(`
     {
+      "codes": {},
       "initialDelayMs": 500,
       "jitterRatio": 0.1,
       "maxDelayMs": 10000,
@@ -744,7 +746,7 @@ it('routes one browser-authored Auto request through the same model before a rea
     'commands/execute',
     { agentId: sessionId, line: '/permission auto', submittedAttachments: [] },
   )
-  expect(switched.result).toEqual({ kind: 'success', text: 'preset auto' })
+  expect(switched.result).toEqual({ kind: 'success', text: '已切换预设：auto' })
 
   const agent = ctx.agents.get(sessionId)
   if (agent === undefined) throw new Error('shipped Auto session was not published')
