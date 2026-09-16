@@ -1,9 +1,11 @@
 - listbox "Trigger suggestions":
+  - text: Add
+  - option "File" [selected]
+  - option "Goal Set or view the goal for a long-running task"
+  - option "Plan Enter or leave plan mode"
+  - option "Feedback Record feedback about this session"
   - text: Commands
-  - option "compact 压缩较早的对话历史" [selected]
-  - option "export 下载本会话日志（ZIP 压缩包）"
-  - option "feedback 记录对本会话的反馈"
-  - option "goal 设置或查看长期任务的完成目标"
-  - option "permission 切换权限预设（沙箱模式 + 审批策略）"
-  - option "plan 进入或退出计划模式"
-  - option "model Select the model for this conversation"
+  - option "Compact Compact older conversation history"
+  - option "Permission Switch the permission preset (sandbox mode + approval policy)"
+  - option "Model Select the model for this conversation"
+  - option "Export Download this Session log as a ZIP archive"
