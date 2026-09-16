@@ -174,7 +174,11 @@ async function readGwBalance(ctx: Context): Promise<BalanceView | null> {
   if (gwBalanceCache !== null && now - gwBalanceCache.cachedAt < 5_000) {
     return gwBalanceCache.value
   }
-  const apiKey = await resolveSecret(ctx, 'GW_API_KEY')
+  // [本地改造 2026-09-13] 修 gw 余额恒不显示：原文写 'GW_API_KEY'，但本机实际配置的
+  // 密钥名是 'GATEWAY_API_KEY'（settings.yaml 的 llm-pi-ai.providers.gw.apiKeyEnv 与
+  // ~/.dsh/.credentials.yaml 存的都是 GATEWAY_API_KEY，全仓库仅此一处写 GW_API_KEY）。
+  // 名字不匹配 → resolveSecret 取不到 → 余额恒为 null。故改为 GATEWAY_API_KEY。
+  const apiKey = await resolveSecret(ctx, 'GATEWAY_API_KEY')
   if (apiKey === undefined) {
     gwBalanceCache = { value: null, cachedAt: now }
     return null
