@@ -153,7 +153,7 @@ describe('ui-theme apply', () => {
     await vi.waitFor(() => { expect(b.mutate).toHaveBeenCalledTimes(2) })
   })
 
-  it('loads Host settings at boot, refreshes its namespace, and keeps remote browsers process-local', async () => {
+  it('loads Host settings at boot, refreshes its namespace, and reads Host settings from remote browsers too', async () => {
     const b = await bench()
     // The shared mirror read once at bench time; a Host-side change reaches it
     // through the document invalidation, exactly as production announces one.
@@ -181,9 +181,10 @@ describe('ui-theme apply', () => {
     await remote.ctx.plugin({ inject: [...inject], apply }).await()
     const remoteTheme = remote.ctx.get('theme') as ThemeRuntime
     remoteTheme.setTheme('dark')
-    await Promise.resolve()
-    expect(remote.describe).not.toHaveBeenCalled()
-    expect(remote.mutate).not.toHaveBeenCalled()
+    // [本地改造 2026-09-11 / README #57] 本地 fork 放开了非 loopback 的 settings 读写，
+    // 远程页面与 loopback 一样走 host persistence，因此远程主题读写会真的打 settings。
+    await vi.waitFor(() => { expect(remote.describe).toHaveBeenCalled() })
+    await vi.waitFor(() => { expect(remote.mutate).toHaveBeenCalled() })
   })
 
   it('activates before a slow settings refresh and converges when it settles', async () => {

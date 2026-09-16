@@ -339,6 +339,7 @@
   width: 7px;
   height: 7px;
   border-radius: 999px;
+  corner-shape: round;
   background: currentColor;
   animation: dsh-voice-pulse 1.2s ease-in-out infinite;
 }
