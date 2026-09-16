@@ -25,6 +25,24 @@ interface ContinuableDrain {
   drainContinuableDescendants(parents: readonly Agent[]): Promise<void>
 }
 
+/** Default bound on fresh-session Agent composition; see {@link sessionSetupTimeoutMs}. */
+const DEFAULT_SESSION_SETUP_TIMEOUT_MS = 90_000
+
+/**
+ * [本地改造 2026-09-16，原为 ACP lib 产物补丁，上游收编流式事件后迁回源码]
+ * Bound on the `session/new` Agent composition. One awaited service request without a
+ * responder leaves `ctx.agents.create` forever pending: the ACP client waits with no
+ * reply and the server writes no bytes to stderr. The raced error surfaces to the SDK
+ * as JSON-RPC `-32603` instead.
+ * @returns the bound in milliseconds, or `undefined` to leave composition unbounded.
+ */
+function sessionSetupTimeoutMs(): number | undefined {
+  const raw = process.env.DSH_ACP_SESSION_SETUP_TIMEOUT_MS
+  if (raw === undefined || raw === '') return DEFAULT_SESSION_SETUP_TIMEOUT_MS
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
 /** Inputs shared by fresh and resumed ACP session construction. */
 interface AcpSessionBuildOptions {
   cwd: string
@@ -125,7 +143,7 @@ export class AcpSession {
    */
   static async create(ctx: Context, options: CreateAcpSessionOptions): Promise<AcpSession> {
     const modelControl = new AcpModelControl(ctx.llm, options.fallbackSelection)
-    const handle = await ctx.agents.create({
+    const composed = ctx.agents.create({
       sessionId: options.sessionId,
       meta: { cwd: options.cwd },
       agentOptions: options.agentOptions,
@@ -135,7 +153,27 @@ export class AcpSession {
         await mountAcpMcpServers(agentCtx, options.mcpServers, options.cwd)
       },
     })
-    return new AcpSession(ctx, handle, modelControl, options.notify)
+    const timeoutMs = sessionSetupTimeoutMs()
+    if (timeoutMs === undefined) {
+      return new AcpSession(ctx, await composed, modelControl, options.notify)
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const expired = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(internalError(`Agent composition did not settle within ${timeoutMs}ms`))
+      }, timeoutMs)
+      timer.unref()
+    })
+    try {
+      return new AcpSession(ctx, await Promise.race([composed, expired]), modelControl, options.notify)
+    } catch (error: unknown) {
+      // A composer that settles after the deadline owned an unpublished Agent; dispose it
+      // so the registry keeps no orphan. Its rejection already lost the race above.
+      void composed.then(handle => handle.dispose(), () => { /* raced error is authoritative */ })
+      throw error
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   /**

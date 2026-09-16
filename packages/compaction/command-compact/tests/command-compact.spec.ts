@@ -64,13 +64,13 @@ class StubCompactionEngine extends CompactionEngine {
     result: CompactionResult,
     sourceCommandId: Parameters<CompactionEngine['compactNow']>[2],
   ): CompactionResult {
-    const provenance = {
+    const operationIds = {
       compactionId: result.compactionId,
       ...sourceCommandId === undefined ? {} : { sourceCommandId },
     }
-    agent.session.append('compaction/start', { ...provenance, turn: null })
+    agent.session.append('compaction/start', { ...operationIds, turn: null })
     agent.session.append('compaction/summary', {
-      ...provenance,
+      ...operationIds,
       summary: result.summary,
       shadowedRange: result.shadowedRange,
       shadowedSeqs: result.shadowedSeqs,
@@ -78,8 +78,8 @@ class StubCompactionEngine extends CompactionEngine {
       provider: 'command-test',
       model: 'command-test',
     })
-    agent.session.append('compaction/end', { ...provenance, turn: null })
-    return { ...result, ...provenance }
+    agent.session.append('compaction/end', { ...operationIds, turn: null })
+    return { ...result, ...operationIds }
   }
 }
 
@@ -162,6 +162,7 @@ describe('@deepseek-ai/dsh-command-compact registration', () => {
     const loader = Object.create(Loader.prototype) as Loader
     expect(loader.unwrapExports(commandCompact)).toBe(commandCompact)
     expect(test.ctx.commands.list(test.agent)).toContainEqual({
+      definitionId: '@deepseek-ai/dsh-command-compact',
       name: 'compact',
       description: '压缩较早的对话历史',
     })

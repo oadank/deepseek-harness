@@ -82,6 +82,8 @@ export interface LlmErrorOptions extends ErrorOptions {
   providerRetryAfterMs?: number
   /** Non-empty opaque provider request id. */
   requestId?: ProviderRequestId
+  /** Positive count of additional oldest retained image occurrences to offload; only with `IMAGE_OFFLOAD_REQUIRED`. */
+  offloadImages?: number
 }
 
 /**
@@ -120,6 +122,7 @@ export class LlmError extends HarnessError {
       ...options?.status === undefined ? {} : { status: options.status },
       ...options?.providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs: options.providerRetryAfterMs },
       ...options?.requestId === undefined ? {} : { requestId: options.requestId },
+      ...options?.offloadImages === undefined ? {} : { offloadImages: options.offloadImages },
     })
   }
 }
@@ -234,7 +237,9 @@ export abstract class LlmAdapter {
    * `'path'` skips the official sha-digest projection so serialize can convert
    * image blocks into local-path text (look_image / vision MCP).
    */
-  readonly textImageHandling?: 'path' | 'omit' = undefined
+  get textImageHandling(): 'path' | 'omit' | undefined {
+    return undefined
+  }
 
   /**
    * List models this adapter can currently advertise for one owned provider.

@@ -7,9 +7,8 @@
  * @module @deepseek-ai/dsh-client-ui-message-feedback/client/controller
  */
 
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
-import type { MessageId } from '@deepseek-ai/dsh-api-remotes/client'
+import type { ClientRemote, MessageId } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { FeedbackRecord } from '@deepseek-ai/dsh-command-feedback/types'
 import type {
@@ -37,11 +36,6 @@ export interface MessageFeedbackActionFailure {
 
 /** Settled action shape rendered by the message-level controls. */
 export type MessageFeedbackActionResult = { ok: true } | MessageFeedbackActionFailure
-
-/** A settled toggle, carrying the rating now committed so the control can tell a record from a retraction. */
-export type MessageFeedbackToggleResult =
-  | { ok: true; rating: MessageFeedbackRating | null }
-  | MessageFeedbackActionFailure
 
 // `Object.freeze` does not protect a Map: `set`/`delete` write internal slots,
 // not properties. Immutability here is by discipline instead — the view type is
@@ -100,11 +94,11 @@ export class MessageFeedbackController implements HostObservable<MessageFeedback
   private disposed = false
 
   /**
-   * @param ctx - the browser plugin context carrying the messageFeedback Remote namespace.
+   * @param remote - the messageFeedback Remote namespace.
    * @param sessionId - Session owning every addressed assistant message.
    */
   constructor(
-    private readonly ctx: ClientContext,
+    private readonly remote: ClientRemote['messageFeedback'],
     private readonly sessionId: SessionId,
   ) {}
 
@@ -176,24 +170,19 @@ export class MessageFeedbackController implements HostObservable<MessageFeedback
   }
 
   /**
-   * Replace one message's rating with the opposite judgment, or retract it when
-   * the committed rating already matches. The decision reads the committed item
-   * inside the serialized mutation, so a click that lands before the first list
-   * read still toggles against the stored value rather than the empty view a
-   * cold control rendered. A replacement stores the bare judgment; the note
-   * and category of the judgment it replaces do not carry over.
+   * Retract one message's matching committed rating. The serialized operation
+   * rechecks the current item and becomes a no-op if another operation already
+   * changed or removed it, so a stale retraction can never record a bare rating.
    * @param messageId - target assistant message.
-   * @param rating - the judgment the human asked for.
-   * @returns the settled mutation result with the rating now committed.
+   * @param rating - judgment the human asked to retract.
+   * @returns the settled mutation result.
    */
-  toggle(messageId: MessageId, rating: MessageFeedbackRating): Promise<MessageFeedbackToggleResult> {
+  retract(messageId: MessageId, rating: MessageFeedbackRating): Promise<MessageFeedbackActionResult> {
     return this.mutate(async () => {
       const observed = this.view.items.get(messageId)
-      const retract = observed?.rating === rating
-      const result = retract
+      return observed?.rating === rating
         ? await this.deleteCommitted(messageId, observed)
-        : await this.putCommitted(messageId, rating, {}, observed)
-      return result.ok ? { ok: true, rating: retract ? null : rating } : result
+        : OK
     })
   }
 
@@ -204,7 +193,7 @@ export class MessageFeedbackController implements HostObservable<MessageFeedback
     entry: FeedbackRecord,
     observed: MessageFeedbackItem | undefined,
   ): Promise<MessageFeedbackActionResult> {
-    const carried = await this.ctx.remote.messageFeedback.put({
+    const carried = await this.remote.put({
       sessionId: this.sessionId,
       messageId,
       rating,
@@ -227,7 +216,7 @@ export class MessageFeedbackController implements HostObservable<MessageFeedback
     messageId: MessageId,
     observed: MessageFeedbackItem,
   ): Promise<MessageFeedbackActionResult> {
-    const carried = await this.ctx.remote.messageFeedback.delete({
+    const carried = await this.remote.delete({
       sessionId: this.sessionId,
       messageId,
       ifVersion: observed.version,
@@ -250,7 +239,7 @@ export class MessageFeedbackController implements HostObservable<MessageFeedback
 
   /** Fetch the whole sidecar and publish it as the seeded view. */
   private async load(): Promise<MessageFeedbackActionResult> {
-    const carried = await this.ctx.remote.messageFeedback.list({ sessionId: this.sessionId })
+    const carried = await this.remote.list({ sessionId: this.sessionId })
     if (this.disposed) return OK
     if (!carried.ok) {
       this.publish({ status: 'error', items: this.view.items, error: carried.error.message })

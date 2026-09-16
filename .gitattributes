@@ -18,3 +18,9 @@
 
 # 语音补丁文件是 diff 数据，允许尾随空格（git diff --cached --check 跳过）
 *.patch -whitespace
+
+# The persistence catalog is the readable projection of these generated schemas.
+docs/persistence-schema.json linguist-generated=true
+docs/persistence-changes/*.schema.json linguist-generated=true
+docs/persistence-changes/releases/*.schema.json linguist-generated=true
+docs/persistence-changes/historical-formats/*.schema.json linguist-generated=true

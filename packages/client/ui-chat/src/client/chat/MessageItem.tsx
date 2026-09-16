@@ -166,7 +166,7 @@ function TurnMaxTokensItem({ t }: {
 /** Right-aligned bubble shared by user and steering rows. */
 function UserStyleBubble({
   content, renderMessageImages, actions, pending = false, echo = false, referenceLabels = [], skillNames = [],
-  previewAttachments, t, voiceLoader, voiceAsrFailedHint = false,
+  previewAttachments, references, t, voiceLoader, voiceAsrFailedHint = false,
 }: {
   content: readonly unknown[]
   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
@@ -182,6 +182,7 @@ function UserStyleBubble({
   skillNames?: readonly string[]
   /** Local submission-echo attachments replacing the content-derived attachment sequence. */
   previewAttachments?: readonly PresentedAttachment[]
+  references?: Pick<ChatNodeOwnerProps, 'openFile' | 'openSkill'>
   /** [抄自 pre-merge] Session-authorized voice loader（调用方兜底 reject）。 */
   voiceLoader: (ref: VoiceAttachmentRef) => Promise<string>
   /** [抄自 pre-merge] 语音无转写时显示「未能识别」提示（用户消息才开）。 */
@@ -237,7 +238,7 @@ function UserStyleBubble({
           />
         ))}
         {showBubble && <div className={css.bubble}>
-          {projectUserText(text, referenceLabels, skillNames)}
+          {projectUserText(text, referenceLabels, skillNames, 'skill', references)}
           {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
         </div>}
         {referenceLabels.length > 0 && (
@@ -340,7 +341,7 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }: 
 
 /** User and admitted-steering keyed Chat renderer. */
 export const UserMessageNodeView = memo(function UserMessageNodeView({
-  node, renderMessageImages, t, loadVoice,
+  node, renderMessageImages, openFile, openSkill, t, loadVoice,
 }: ChatNodeViewProps<'user' | 'steering'>) {
   const data = node.data
   // [抄自 pre-merge] loader 缺失（无语音通道部署）时兜底 reject，卡片降级为禁用态而非崩溃。
@@ -348,6 +349,7 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
   return (
     <UserStyleBubble
       content={data.content}
+      references={{ openFile, openSkill }}
       renderMessageImages={renderMessageImages}
       voiceLoader={voiceLoader}
       voiceAsrFailedHint
@@ -374,7 +376,7 @@ export const ContextMessageNodeView = memo(function ContextMessageNodeView({ nod
     <ContextInjectionRow
       content={data.content}
       source={data.source}
-      provenance={data.provenance}
+      producer={data.producer}
       form={data.form}
       t={t}
     />

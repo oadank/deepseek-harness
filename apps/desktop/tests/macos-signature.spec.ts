@@ -7,7 +7,7 @@ import {
 } from '../scripts/desktop-release-environment.mjs'
 import { notarizeMacOSDiskImageArtifact } from '../scripts/notarize-macos-disk-images.mjs'
 import {
-  assertMacOSSeedSignatureDetails,
+  assertMacOSRuntimeSignatureDetails,
   assertMacOSSignatureDetails,
 } from '../scripts/verify-macos-signature.mjs'
 
@@ -40,17 +40,28 @@ describe('desktop macOS release signature', () => {
     const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
     const config = createElectronBuilderConfig(RELEASE_ENVIRONMENT, 'darwin', 'arm64')
     expect(portablePath(config.directories.output)).toContain('/.desktop-build/targets/mac-arm64/artifacts')
-    expect(config.extraResources).toHaveLength(2)
+    expect(config.extraResources).toHaveLength(1)
     expect(config.extraResources[0]?.to).toBe('runtime')
-    expect(config.extraResources[1]?.to).toBe('seed')
     expect(portablePath(config.extraResources[0]?.from ?? '')).toContain('/.desktop-build/targets/mac-arm64/runtime')
-    expect(portablePath(config.extraResources[1]?.from ?? '')).toContain('/.desktop-build/targets/mac-arm64/seed')
+    const [dshFiles, dshNodeModules] = config.files.slice(-2)
+    if (!dshFiles || !dshNodeModules || typeof dshFiles === 'string' || typeof dshNodeModules === 'string') {
+      throw new Error('desktop DSH resources must use electron-builder file mappings')
+    }
+    expect(portablePath(dshFiles.from)).toContain('/.desktop-build/targets/mac-arm64/dsh')
+    expect(dshFiles.to).toBe('dsh')
+    expect(portablePath(dshNodeModules.from)).toContain('/.desktop-build/targets/mac-arm64/dsh/node_modules')
+    expect(dshNodeModules.to).toBe('dsh/node_modules')
+    expect(config.asarUnpack).toEqual(expect.arrayContaining([
+      '**/*.{node,dylib,dll,so,exe}',
+      '**/@vscode/ripgrep/bin/rg',
+    ]))
     expect(config).toMatchObject({
       appId: RELEASE_ENVIRONMENT.DSH_DESKTOP_APP_ID,
       mac: {
         identity: RELEASE_ENVIRONMENT.DSH_DESKTOP_MACOS_SIGNING_IDENTITY,
         forceCodeSigning: true,
         notarize: true,
+        signIgnore: ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '\\.pak$'],
       },
       dmg: {
         sign: true,
@@ -64,12 +75,50 @@ describe('desktop macOS release signature', () => {
     expect(typeof config.artifactBuildCompleted).toBe('function')
   })
 
+  it('seals PAK resources with their enclosing bundle while signing executable code', async () => {
+    const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
+    const config = createElectronBuilderConfig(RELEASE_ENVIRONMENT, 'darwin', 'arm64')
+    const ignored = (path: string): boolean => config.mac.signIgnore.some(pattern => new RegExp(pattern).test(path))
+    expect(ignored('/App.app/Contents/Frameworks/Electron.framework/Versions/A/Resources/en.lproj/locale.pak')).toBe(true)
+    expect(ignored('/App.app/Contents/Frameworks/Electron.framework/Versions/A/Resources/resources.pak')).toBe(true)
+    for (const path of [
+      '/App.app/Contents/Resources/runtime/node/node',
+      '/App.app/Contents/Resources/runtime/pnpm/addon.node',
+      '/App.app/Contents/Frameworks/Electron.framework/Versions/A/library.dylib',
+      '/App.app/Contents/Frameworks/Electron.framework',
+      '/App.app',
+    ]) expect(ignored(path)).toBe(false)
+  })
+
   it('validates Windows signing without requiring macOS identifiers for a Windows target', async () => {
     const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
     expect(() => createElectronBuilderConfig({
       DSH_DESKTOP_APP_ID: RELEASE_ENVIRONMENT.DSH_DESKTOP_APP_ID,
       DSH_DESKTOP_TARGET_PLATFORM: 'win32',
     }, 'win32')).toThrow(/DSH_DESKTOP_WINDOWS_CER_FILE/u)
+  })
+
+  it('isolates unsigned Windows artifacts and omits updater metadata without release credentials', async () => {
+    const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
+    const config = createElectronBuilderConfig({
+      DSH_DESKTOP_APP_ID: RELEASE_ENVIRONMENT.DSH_DESKTOP_APP_ID,
+      DSH_DESKTOP_TARGET_PLATFORM: 'win32',
+      DSH_DESKTOP_UNSIGNED: '1',
+    }, 'win32', 'x64')
+    expect(portablePath(config.directories.output)).toContain('/targets/win-x64/unsigned-artifacts')
+    expect(portablePath(config.nsis.include)).toMatch(/\/scripts\/installer\.nsh$/u)
+    expect(config).toMatchObject({
+      win: { forceCodeSigning: false, signtoolOptions: { sign: undefined } },
+      publish: null,
+    })
+  })
+
+  it('rejects unsigned macOS builds and malformed signing modes', async () => {
+    const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
+    expect(() => createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_UNSIGNED: '1' }))
+      .toThrow(/unsigned builds require Windows/u)
+    expect(() => createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_UNSIGNED: 'yes' }))
+      .toThrow(/must be 0 or 1/u)
   })
 
   it('accepts the configured authority and team', () => {
@@ -82,7 +131,7 @@ describe('desktop macOS release signature', () => {
     }).not.toThrow()
   })
 
-  it('requires a secure timestamp and hardened runtime for seed code', () => {
+  it('requires a secure timestamp and hardened runtime for runtime code', () => {
     const expected = resolveMacOSSigningEnvironment(RELEASE_ENVIRONMENT)
     const details = [
       `Authority=Developer ID Application: ${expected.signingIdentity}`,
@@ -90,12 +139,12 @@ describe('desktop macOS release signature', () => {
       'Timestamp=31 Aug 2026 at 20:00:00',
       'CodeDirectory v=20500 size=773 flags=0x10000(runtime) hashes=13+7 location=embedded',
     ].join('\n')
-    expect(() => { assertMacOSSeedSignatureDetails(details, expected) }).not.toThrow()
+    expect(() => { assertMacOSRuntimeSignatureDetails(details, expected) }).not.toThrow()
     expect(() => {
-      assertMacOSSeedSignatureDetails(details.replace(/^Timestamp=.*\n/um, ''), expected)
+      assertMacOSRuntimeSignatureDetails(details.replace(/^Timestamp=.*\n/um, ''), expected)
     }).toThrow(/secure timestamp/u)
     expect(() => {
-      assertMacOSSeedSignatureDetails(details.replace('flags=0x10000(runtime)', 'flags=0x0(none)'), expected)
+      assertMacOSRuntimeSignatureDetails(details.replace('flags=0x10000(runtime)', 'flags=0x0(none)'), expected)
     }).toThrow(/hardened runtime/u)
   })
 
