@@ -210,3 +210,14 @@ DSH_HOME/attachments/v1/objects/<sha256 前 2 位>/<sha256>
   涉及：`core/session`、`host/apiproxy`（含新增 `image.ts`）、`client/connection`、`client/runtime`、`client/ui-conversation`（含新增 `image-reply.ts` / `ImageReplyNodeView.tsx`）。
 - 插件仓库 `plugins/dsh-input-tools`：`send_image` 工具已随 `0.3.24` 发布并部署运行时。
 - 重大重构 / 回滚前先 push 建立基线（fork 约定）。
+
+## 2026-09-19 补丁丢失事故与修复（agent 实测）
+
+**症状**：agent 调 `send_image` 返回成功、对象已落附件池（PNG 字节完好、尺寸解析正常），但聊天里横条显示"图片加载失败，点击重试"。
+
+**根因**：读回授权函数 `imageInEvent()` 原本在 `packages/host/apiproxy/src/api-proxy.ts`（本 fork 第 29/34 条改造），上游把它迁到 `packages/api/session-controller/src/commands.ts` 时，**`image/reply` 分支没有被带过去**。`image/reply` 的 `attachmentId` 在事件负载顶层，不在 `content`/`message.content`/`inserted[].content`/assistant 流的 image 块里，因此 `referencedImage()` 找不到 → `attachment()` 抛 `ATTACHMENT_NOT_REFERENCED` → 客户端 `load()` reject。
+用户自己发的图仍正常，是因为它走 `preview` 臂（浏览器本地 blob，不做回源），**不能用来证明读回链路健康**。
+
+**修复**：`commands.ts` 的 `imageInEvent()` 内补 `image/reply` 分支，从顶层字段重建 `ImageAttachmentRef` 后再 `match()`。
+
+**构建教训（同样重要）**：只跑 `pnpm --filter <pkg> run bundle` **不会生效** —— tsdown 入口是 `lib/types/index.js`，那是 tsc 的产物。必须先 `node ./node_modules/typescript/bin/tsc -b packages/api/session-controller/tsconfig.host.json` 发 `lib/types`，再 bundle。验证方式：在 `lib/index.js` 里 grep 新增代码的独有标识。

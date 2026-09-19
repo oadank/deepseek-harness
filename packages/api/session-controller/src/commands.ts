@@ -621,6 +621,27 @@ function imageInEvent(
     const found = imageBlockIn(inserted.content, match)
     if (found !== undefined) return found
   }
+  if (event.type === 'image/reply') {
+    // `image/reply` carries the reference as top-level payload fields rather than
+    // inside an `image` content block, so the content probes above never reach it.
+    // Without this arm a reply image is rejected as unreferenced and the client
+    // shows its load-failure control instead of the picture.
+    const reply = event.data as {
+      readonly attachmentId?: unknown
+      readonly mediaType?: unknown
+      readonly bytes?: unknown
+      readonly width?: unknown
+      readonly height?: unknown
+    }
+    const ref = {
+      attachmentId: reply.attachmentId,
+      mediaType: reply.mediaType,
+      bytes: reply.bytes,
+      width: reply.width,
+      height: reply.height,
+    } as unknown as ImageAttachmentRef
+    if (typeof reply.attachmentId === 'string' && match(ref)) return ref
+  }
   if (event.type === 'assistant/message' || event.type === 'assistant/attempt') {
     for (const chunk of assistantStreamChunks(event.data.stream, 'block-end')) {
       const found = imageBlockIn([chunk.block], match)
