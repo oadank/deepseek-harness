@@ -443,6 +443,29 @@ export interface SessionEventMap {
     /** Optional display caption. */
     alt?: string
   }
+  /**
+   * [本地改造 2026-09-20] 助手侧视频回复：agent 主动发送的视频，作为一条独立
+   * 持久视频消息（与 image/reply 同级）。前端渲染为独立视频横条（缩略预览，
+   * 点击放大播放，关闭收回）。log-only：不进入模型历史重建。
+   */
+  'video/reply': {
+    /** The turn whose assistant activity this video belongs to. */
+    turn: number
+    /** Opaque storage identifier of the video object. */
+    attachmentId: string
+    /** Video container format of the stored object. */
+    mediaType: string
+    /** Exact encoded byte length. */
+    bytes: number
+    /** Intrinsic encoded width in pixels (absent when unknown). */
+    width?: number
+    /** Intrinsic encoded height in pixels (absent when unknown). */
+    height?: number
+    /** Playback duration in milliseconds (absent when unknown). */
+    durationMs?: number
+    /** Optional display caption. */
+    alt?: string
+  }
 }
 
 /** The appendable event-type keys of {@link SessionEventMap}, plugin-merged extensions included. */
