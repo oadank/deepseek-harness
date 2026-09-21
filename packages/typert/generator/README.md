@@ -87,6 +87,8 @@ Host and Client are independent TypeScript programs. Direct project references e
 
 ### Catalog projection
 
+The runtime type closure indexes exported workspace declarations and referenced framework enums. Vendored declarations stay outside business API discovery; their enums remain available when a public result refers to them.
+
 The root export includes the model-driven extraction, completeness checks, and deterministic text renderers used by this repository's Cordis catalogs. They accept a `CordisCatalogPolicy`; repository-owned type links, foundation and exemption classifications, and inherited Cordis entries stay in `scripts/gen-cordis-catalog.ts` and are passed in explicitly, so this package contains projection mechanics, not a hidden copy of the repository's documentation taxonomy.
 
 </details>

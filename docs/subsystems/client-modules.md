@@ -100,7 +100,7 @@ interface ClientArtifactBaseline {
 
 `ClientModuleRegistry` (`ctx.clientModules`, defined in [`packages/client/modules/src/index.ts`](../../packages/client/modules/src/index.ts)) exposes reads and the rebuild face; signatures are in the generated [service catalog](#ctxclientmodules--clientmoduleregistry). `graph()` returns the current composed graph (a stable object between changes), `clientPath(id)` returns the bundle's absolute path, and `artifactBaseline(id)` returns the bundle stat values captured before the current snapshot was read. `fetchBundle()` resolves the same lazy response used by the HTTP route. `rebuilt(id)` is the only entry point through which changed bundle content reaches the graph: it re-hashes the bundle bytes, and only a real revision change recomposes the graph and notifies. `onRebuilt` fires per changed bundle with the new revision; `onGraphChanged` fires after any flush that recomposed the graph (row added or removed, or a rebuilt revision change) and is pull-model — listeners re-read `graph()`. Both notification paths contain listener exceptions so one throwing subscriber cannot skip later subscribers or kill whatever triggered the flush.
 
-In development, [dsh-client-hmr](../../packages/client/hmr/README.md) is the registry's watch driver: its node half stat-polls every graph row's bundle from the module host's pre-read baseline, calls `rebuilt(id)` only for a changed or dirty row, resyncs its watch set through `onGraphChanged`, and broadcasts revision changes to the browser half over SSE. Source-map changes alone do not trigger a reload; a new combo-map URL appears only after a bundle revision changes, and each map body is fixed by its first `GET`. Production graphs omit the HMR row entirely; the module host itself never watches files.
+[`dsh-client-hmr`](../../packages/client/hmr/README.md) delivers live graph snapshots in the shipped Web composition. The Host forwards existing graph-change notifications immediately, and reconnect sends the current full graph. A graph describes desired browser entries without asserting that Host cleanup has completed. Its artifact poll separately reports rebuilt revisions. Source-map changes alone do not trigger a reload; a new combo-map URL appears only after a bundle revision changes, and each map body is fixed by its first `GET`. Client Modules validates snapshots and serializes reconciliation with those rebuilds; it owns the boot-created entry map, single-resource arrivals, asynchronous removal, unused-module/style cleanup and page-local retry status. Static platform modules and the bootstrap retain their page lifetime; Electron installation is a separate flow.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -151,8 +151,8 @@ async fetchBundle(request: Request): Promise<Response>
 artifactBaseline(id: string): ClientArtifactBaseline | undefined
 
 /**
- * Re-hash one bundle (the HMR watch's registration hook — the only entry
- * point through which bundle content changes reach the graph).
+ * Publish one completed bundle generation (the HMR watch's registration
+ * hook — the only entry point through which build changes reach the graph).
  * @param id - entry id (package name).
  * @returns the new rev, or undefined for an unknown id.
  */

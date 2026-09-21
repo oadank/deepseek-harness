@@ -2,8 +2,8 @@
 import { notifySubscribers } from '@deepseek-ai/dsh-client-store'
 import { documentFileName, matchedSuffixLength, normalizeSuffix } from './suffix.ts'
 
-/** How the document owner delivers file contents to a renderer. */
-export type DocumentLoadMode = 'text-pages' | 'bytes-complete' | 'stream'
+/** Shared text or byte reads, renderer-owned loading, or body-owned stream mode. */
+export type DocumentLoadMode = 'text-pages' | 'bytes-complete' | 'renderer' | 'stream'
 
 /** One renderer implementation, independent of its component registration. */
 export interface DocumentPreviewDefinition {
