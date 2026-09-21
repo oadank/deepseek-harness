@@ -13,10 +13,13 @@ export interface DocumentTextPage {
 /**
  * Contents prepared by the preview owner using ordinary file reads.
  * Byte arrays are transient UI input, never persisted layout or Session data.
+ * A `stream` content carries no bytes: a stream renderer reads the file itself
+ * over its own transport (media streaming), so the owner never loads it here.
  */
 export type DocumentContent =
   | { readonly kind: 'text'; readonly text: string; readonly pages: readonly DocumentTextPage[]; readonly eof: boolean }
   | { readonly kind: 'bytes'; readonly data: Uint8Array<ArrayBuffer> }
+  | { readonly kind: 'stream' }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {

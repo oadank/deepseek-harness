@@ -3,7 +3,7 @@ import { notifySubscribers } from '@deepseek-ai/dsh-client-store'
 import { documentFileName, matchedSuffixLength, normalizeSuffix } from './suffix.ts'
 
 /** How the document owner delivers file contents to a renderer. */
-export type DocumentLoadMode = 'text-pages' | 'bytes-complete'
+export type DocumentLoadMode = 'text-pages' | 'bytes-complete' | 'stream'
 
 /** One renderer implementation, independent of its component registration. */
 export interface DocumentPreviewDefinition {

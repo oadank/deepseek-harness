@@ -128,7 +128,7 @@ export function TextPreview({
   const pages = current?.pages
   const loaded = useMemo(() => loadedPages(pages ?? {}), [pages])
   const loadedThrough = lastLineLoaded(loaded)
-  const hasContent = loaded.length > 0 || current?.complete !== undefined
+  const hasContent = loaded.length > 0 || current?.complete !== undefined || mode === 'stream'
   storedScrollTopRef.current = state?.scrollTop ?? 0
   const bindBody = useCallback((body: HTMLDivElement | null): void => {
     const previous = bodyRef.current
@@ -147,8 +147,9 @@ export function TextPreview({
   useEffect(() => {
     if (started || !canRead || mode === undefined) return
     if (mode === 'text-pages') loadPage(tab.id, file, 1, signal, meta.value?.version)
-    else loadAll(tab.id, file, signal, meta.value?.version)
-  }, [started, tab.id, file, signal, loadPage, loadAll, canRead, mode, meta.value?.version])
+    else if (mode === 'bytes-complete') loadAll(tab.id, file, signal, meta.value?.version)
+    else actions.streamed(tab.id, mode, meta.value?.version)
+  }, [started, tab.id, file, signal, loadPage, loadAll, actions, canRead, mode, meta.value?.version])
 
   // Come back where the reader was once there is content to scroll: on a remount,
   // after a reload rebuilt the content, or after the selected renderer changed.
@@ -187,12 +188,13 @@ export function TextPreview({
   ])
 
   const content = useMemo((): DocumentContent | undefined => {
+    if (mode === 'stream') return current === undefined ? undefined : { kind: 'stream' }
     if (mode === 'bytes-complete') {
       return current?.complete === undefined ? undefined : { kind: 'bytes', data: current.complete.data }
     }
     if (current === undefined || loaded.length === 0) return undefined
     return { kind: 'text', pages: loaded, text: loaded.filter(page => page.lines > 0).map(page => page.text).join('\n'), eof: current.eof }
-  }, [mode, loaded, current?.complete, current?.eof])
+  }, [mode, loaded, current, current?.complete, current?.eof])
 
   // A known binary suffix with no matching renderer never reads: no plain-text
   // fallback, no viewer control, only the path and the unsupported line.
@@ -233,7 +235,8 @@ export function TextPreview({
   const reload = (): void => {
     if (!canRead) return
     if (mode === 'text-pages') reloadPages(tab.id, file, signal, meta.value?.version)
-    else reloadAll(tab.id, file, signal, meta.value?.version)
+    else if (mode === 'bytes-complete') reloadAll(tab.id, file, signal, meta.value?.version)
+    else if (mode !== undefined) actions.streamed(tab.id, mode, meta.value?.version)
   }
   return (
     <div className={css.preview} data-textpreview-state="text" data-textpreview-url={tab.contentId} data-document-preview={selected.id}>

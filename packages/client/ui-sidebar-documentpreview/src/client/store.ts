@@ -89,6 +89,8 @@ function bucket(state: TextState, tabId: TabId): TextTabState {
 type TextActions = {
   selected: (draft: TextState, tabId: TabId, rendererId: string | undefined) => void
   loading: (draft: TextState, tabId: TabId, mode?: DocumentLoadMode, observedVersion?: string) => void
+  /** Mark a stream renderer as ready without reading: it reads the file itself. */
+  streamed: (draft: TextState, tabId: TabId, mode: DocumentLoadMode, observedVersion?: string) => void
   complete: (draft: TextState, tabId: TabId, file: DocumentFileBytes) => void
   page: (draft: TextState, tabId: TabId, page: WorkspaceFileText) => void
   failed: (draft: TextState, tabId: TabId, failure: RemoteFailure) => void
@@ -128,6 +130,22 @@ export function createTextStore(): EngineStoreHandle<TextState, TextActions> {
         state.loading = true
         state.failure = undefined
         if (mode !== undefined) state.mode = mode
+      },
+      /**
+       * Mark a stream renderer ready without any read: the renderer reads the
+       * file itself over its own transport, so the store only records the mode.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param mode - the stream renderer's loading mode.
+       * @param observedVersion - metadata version at first marking.
+       */
+      streamed: (d, tabId: TabId, mode: DocumentLoadMode, observedVersion?: string) => {
+        const state = bucket(d, tabId)
+        if (state.version === undefined) state.observedVersion = observedVersion
+        state.mode = mode
+        state.loading = false
+        state.eof = true
+        state.failure = undefined
       },
       /** @param d - draft. @param tabId - owning tab. @param file - complete byte result for this view. */
       complete: (d, tabId: TabId, file: DocumentFileBytes) => {
