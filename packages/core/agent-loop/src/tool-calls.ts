@@ -24,14 +24,14 @@ import { assertNever } from '@deepseek-ai/dsh-util-values'
  */
 function resolveToolScheduler(tools: Context['tools'] | undefined): ToolRuntimeScheduler | undefined {
   if (tools == null) return undefined
-  const direct = (tools as Record<symbol, unknown>)[TOOL_RUNTIME_SCHEDULER] as ToolRuntimeScheduler | undefined
+  const bag = tools as unknown as Record<symbol | string, unknown>
+  const direct = bag[TOOL_RUNTIME_SCHEDULER as unknown as string] as ToolRuntimeScheduler | undefined
   if (direct != null && typeof direct.prepare === 'function') return direct
   for (const sym of Object.getOwnPropertySymbols(tools)) {
-    const value = (tools as Record<symbol, unknown>)[sym] as ToolRuntimeScheduler | undefined
+    const value = bag[sym] as ToolRuntimeScheduler | undefined
     if (value != null && typeof value.prepare === 'function' && typeof value.dispatch === 'function') return value
   }
-  const named = (tools as { schedulerRuntime?: unknown; scheduler?: unknown }).schedulerRuntime
-    ?? (tools as { scheduler?: unknown }).scheduler
+  const named = bag.schedulerRuntime ?? bag.scheduler
   if (named != null && typeof (named as ToolRuntimeScheduler).prepare === 'function') return named as ToolRuntimeScheduler
   return undefined
 }
