@@ -83,7 +83,11 @@ async function boot() {
             data-renderer={id} data-renderer-tab={tab.id}
             data-renderer-path={resource.value?.absolutePath} data-renderer-version={resource.value?.version}
           >
-            {props.content.kind === 'text' ? props.content.text : new TextDecoder().decode(props.content.data)}
+            {props.content.kind === 'text'
+              ? props.content.text
+              : props.content.kind === 'bytes'
+                ? new TextDecoder().decode(props.content.data)
+                : ''}
           </div>
         )
       },
