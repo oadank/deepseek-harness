@@ -284,7 +284,7 @@ export function assertReleasedPayloadSemantics(event: SessionFormatEvent, versio
     case 'user/message':
       messageValue(data, label, version, 'user')
       return
-    // [本地改造 2026-08-16/23 · 0.1.5 解封] fork 语音/图片回复事件的 v0 负载语义。
+    // [本地改造 2026-08-16/23 · 0.1.5 解封；2026-09-23 补 video] fork 语音/图片/视频回复事件的 v0 负载语义。
     case 'voice/reply':
       countValue(data['turn'], `${label} turn`)
       nonEmptyString(data['voiceId'], `${label} voiceId`)
@@ -300,6 +300,16 @@ export function assertReleasedPayloadSemantics(event: SessionFormatEvent, versio
       positiveIntegerValue(data['bytes'], `${label} bytes`)
       positiveIntegerValue(data['width'], `${label} width`)
       positiveIntegerValue(data['height'], `${label} height`)
+      if (data['alt'] !== undefined) stringValue(data['alt'], `${label} alt`)
+      return
+    case 'video/reply':
+      countValue(data['turn'], `${label} turn`)
+      nonEmptyString(data['attachmentId'], `${label} attachmentId`)
+      nonEmptyString(data['mediaType'], `${label} mediaType`)
+      positiveIntegerValue(data['bytes'], `${label} bytes`)
+      if (data['width'] !== undefined) positiveIntegerValue(data['width'], `${label} width`)
+      if (data['height'] !== undefined) positiveIntegerValue(data['height'], `${label} height`)
+      if (data['durationMs'] !== undefined) positiveIntegerValue(data['durationMs'], `${label} durationMs`)
       if (data['alt'] !== undefined) stringValue(data['alt'], `${label} alt`)
       return
     case 'web/deepseek-search-llm-request':

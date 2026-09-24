@@ -136,6 +136,10 @@ const validPayloads: Readonly<Record<string, SessionFormatJsonValue>> = {
   'turn/end': { turn: 1, reason: { kind: 'completed' } },
   'turn/start': { turn: 1 },
   'user/message': userMessage,
+  'video/reply': {
+    turn: 1, attachmentId: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    mediaType: 'video/mp4', bytes: 20, width: 320, height: 240, durationMs: 2000, alt: 'clip',
+  },
   'voice/reply': {
     turn: 1, voiceId: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     mediaType: 'audio/mpeg', bytes: 10, durationMs: 1500, transcript: 'hi',
@@ -222,7 +226,7 @@ function replaceAtPath(value: SessionFormatJsonValue, path: string, replacement:
 describe('released event and payload inventory', () => {
   it('has an executable valid fixture for every frozen released-v0 event type', () => {
     expect(Object.keys(validPayloads).sort()).toEqual([...RELEASED_V0_EVENT_TYPES].sort())
-    expect(RELEASED_V0_EVENT_TYPES).toHaveLength(53)
+    expect(RELEASED_V0_EVENT_TYPES).toHaveLength(54)
     expect(RELEASED_V0_EVENT_TYPES.filter(type => !KNOWN_SESSION_EVENT_TYPES.has(type))).toEqual([
       'assistant/chunk',
       'tool/code-dispatch',

@@ -205,4 +205,10 @@ describe('unknown V3 event identities', () => {
     const known = event('turn/start', { turn: 1 })
     expect(namespaceV3OpaqueEvent(known)).toBe(known)
   })
+
+  // [本地改造 2026-09-23] fork 回复事件是已发布历史身份，不得被命名空间成 plugin:*。
+  it.each(['voice/reply', 'image/reply', 'video/reply'])('keeps fork %s as a released identity', (type) => {
+    const row = event(type, { turn: 1 })
+    expect(namespaceV3OpaqueEvent(row)).toBe(row)
+  })
 })

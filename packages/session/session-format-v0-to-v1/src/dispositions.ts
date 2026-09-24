@@ -122,8 +122,8 @@ export const RELEASED_V0_EVENT_DISPOSITIONS: Readonly<Record<string, ReleasedV0P
   'turn/end': disposition(['turn', 'reason']),
   'turn/start': disposition(['turn']),
   'user/message': disposition(['role', 'id', 'content', 'source']),
-  // [本地改造 2026-08-16/23 · 0.1.5 解封] fork 自定义会话事件：历史 v0 日志必须可迁移，
-  // 否则含图片/语音回复的旧会话打不开。payload 形状对齐 core/session SessionEventMap。
+  // [本地改造 2026-08-16/23 · 0.1.5 解封；2026-09-23 补 video] fork 自定义会话事件：历史 v0 日志必须可迁移，
+  // 否则含图片/语音/视频回复的旧会话打不开。payload 形状对齐 core/session SessionEventMap。
   'voice/reply': disposition(
     ['turn', 'voiceId', 'mediaType', 'bytes'],
     ['durationMs', 'transcript'],
@@ -131,6 +131,10 @@ export const RELEASED_V0_EVENT_DISPOSITIONS: Readonly<Record<string, ReleasedV0P
   'image/reply': disposition(
     ['turn', 'attachmentId', 'mediaType', 'bytes', 'width', 'height'],
     ['alt'],
+  ),
+  'video/reply': disposition(
+    ['turn', 'attachmentId', 'mediaType', 'bytes'],
+    ['width', 'height', 'durationMs', 'alt'],
   ),
   'web/deepseek-search-llm-request': disposition(['endpoint', 'apiVersion', 'body']),
 })

@@ -87,6 +87,30 @@ describe('V3 to V4 source preservation', () => {
     expect(restore(rows)).toEqual(restore(rows))
   })
 
+  // [本地改造 2026-09-23] fork 语音/图片/视频回复是 v3 历史日志里的必需事件，迁移必须放行。
+  it('retains fork voice/image/video reply events through V3 to V4 migration', () => {
+    const replies: SessionFormatEvent[] = [
+      { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
+      { type: 'voice/reply', seq: 1, time: 2, data: {
+        turn: 1, voiceId: 'sha256:bbbb', mediaType: 'audio/mpeg', bytes: 10, durationMs: 1500, transcript: 'hi',
+      } },
+      { type: 'image/reply', seq: 2, time: 3, data: {
+        turn: 1, attachmentId: 'sha256:aaaa', mediaType: 'image/png', bytes: 12, width: 4, height: 4,
+      } },
+      { type: 'video/reply', seq: 3, time: 4, data: {
+        turn: 1, attachmentId: 'sha256:cccc', mediaType: 'video/mp4', bytes: 20, width: 320, height: 240,
+      } },
+      { type: 'turn/end', seq: 4, time: 5, data: { turn: 1, reason: { kind: 'completed' } } },
+    ]
+    const before = structuredClone(replies)
+    expect(migrate(replies).events).toEqual(replies)
+    expect(replies).toEqual(before)
+    expect(restore(replies).events).toEqual(replies)
+    for (const type of ['voice/reply', 'image/reply', 'video/reply'] as const) {
+      expect(() => migrate([{ ...fact, type, seq: 0, data: { turn: 1 } }])).not.toThrow()
+    }
+  })
+
   it('keeps interleaved stage state independent and derives an inherited cut unavailable before EOF', () => {
     const inherited = stage({ ...header, isSeeded: true, parentSession: 'ancestor' })
     const local = stage()

@@ -27,6 +27,10 @@ export const RELEASED_V3_EVENT_TYPES: ReadonlySet<string> = new Set([
   'hook/invoked',
   'hook/result',
   'image/offload',
+  // [本地改造 2026-09-23 · 0.1.7 解封] fork 自定义会话事件：历史 v3 日志必须可迁移，
+  // 否则含语音/图片/视频回复的旧会话打不开（unknown event type 拒读）。
+  // payload 形状对齐 core/session SessionEventMap；log-only，不进模型历史。
+  'image/reply',
   'llm/retry',
   'llm/retry-started',
   'model/selection',
@@ -62,6 +66,8 @@ export const RELEASED_V3_EVENT_TYPES: ReadonlySet<string> = new Set([
   'turn/end',
   'turn/start',
   'user/message',
+  'video/reply',
+  'voice/reply',
   'web/deepseek-search-llm-request',
   'workspace/changes',
 ])
