@@ -385,7 +385,7 @@ export class BasicCompactionEngine extends CompactionEngine {
     if (measurement.totalTokens < spec.thresholdTokens) return null
 
     let result: CompactionResult | null = null
-    const inputBudget = summarizationInputBudget(context.contextWindow, spec.maxTokens)
+    const inputBudget = summarizationInputBudget(info.context.contextWindow, spec.maxTokens)
     for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
       const range = selectCompactableRange(agent.session, measurement, spec.retainTokens, inputBudget)
       if (range === null) {

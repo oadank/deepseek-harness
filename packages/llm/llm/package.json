@@ -66,6 +66,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-util-crypto": "workspace:*",
     "@deepseek-ai/schemastery": "workspace:~",
+    "undici": "^7.8.0",
     "zod": "^4.4.3",
     "@deepseek-ai/dsh-timeout": "workspace:*",
     "@deepseek-ai/dsh-brand": "workspace:*",

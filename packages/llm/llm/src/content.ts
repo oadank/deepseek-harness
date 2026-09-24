@@ -219,12 +219,10 @@ export function projectVoicesToText(messages: readonly RequestMessage[]): readon
   if (!messages.some(message => message.content.some(block => block.type === 'voice'))) return messages
   return messages.map((message): RequestMessage => {
     if (!message.content.some(block => block.type === 'voice')) return message
-    const content = message.content.flatMap((block): ContentBlock[] => (block.type === 'voice'
+    // Tool results are their own messages in 0.1.7, so this one pass covers them.
+    return { ...message, content: message.content.flatMap((block): ContentBlock[] => (block.type === 'voice'
       ? [{ type: 'text', text: voiceHandleText(block.attachment) }]
-      : block.type === 'tool-result'
-        ? [{ ...block, content: projectVoicesToText([{ ...message, role: 'user', content: block.content } as RequestMessage]).flatMap(projected => projected.content) }]
-        : [block]))
-    return { ...message, content }
+      : [block])) }
   })
 }
 

@@ -366,19 +366,19 @@ describe('voice projection', () => {
     }
   })
 
-  it('clears a voice nested in a tool result and leaves voice-free turns untouched', () => {
-    const nested = createToolResultMessage({
+  it('clears a voice carried by a tool result message and leaves voice-free turns untouched', () => {
+    const withVoice = createToolResultMessage({
       callId: ToolCallId('voice-result'),
       content: [{ type: 'text', text: 'said' }, voice('收到')],
       isError: false,
     })
     const plain = createUserMessage({ content: [{ type: 'text', text: 'text only' }], source })
-    const projected = projectVoicesToText([plain, nested])
+    const projected = projectVoicesToText([plain, withVoice])
     expect(projected[0]).toBe(plain)
-    const block = projected[1]?.content[0]
-    expect(block?.type).toBe('tool-result')
-    const inner = block?.type === 'tool-result' ? block.content : []
-    expect(inner).toEqual([{ type: 'text', text: 'said' }, { type: 'text', text: '[用户发送了一条语音，识别内容：收到]' }])
+    expect(projected[1]?.content).toEqual([
+      { type: 'text', text: 'said' },
+      { type: 'text', text: '[用户发送了一条语音，识别内容：收到]' },
+    ])
   })
 })
 
