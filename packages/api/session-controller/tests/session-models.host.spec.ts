@@ -685,12 +685,11 @@ describe('Web session model selection', () => {
     expectValue(await remote.selectModel(request({
       sessionId, provider: 'text-only', model: 'plain',
     })))
+    // [本地改造 2026-09-10 e4b4681009] 文本模型也放行图片：图片走本地对象路径 +
+    // look_image 桥接（与 0.1.1 行为对齐），官方的 MODEL_DOES_NOT_SUPPORT_IMAGES 拒绝不再适用。
     expect(await remote.prompt(promptRequest({
       sessionId, mode: 'queue', content: [image],
-    }))).toMatchObject({
-      ok: false,
-      error: { code: 'session/attachment-invalid', details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' } },
-    })
+    }))).toMatchObject({ ok: true, value: { accepted: true } })
 
     expectValue(await remote.selectModel(request({
       sessionId, provider: 'image-capable', model: 'vision',
@@ -712,7 +711,8 @@ describe('Web session model selection', () => {
     }))).toMatchObject({ ok: false, error: { code: 'gateway/internal', message: 'fixture rejected' } })
     saveMode = 'success'
     expectValue(await remote.prompt(promptRequest({ sessionId, mode: 'queue', content: [image] })))
-    expect(followup).toHaveBeenCalledOnce()
+    // [本地改造 2026-09-11] 图片放行后，前面 text-only 的图片 prompt 也已入队，followup 共 2 次。
+    expect(followup).toHaveBeenCalledTimes(2)
 
     ;(agent.inbox.nextTurn as UserMessage[]).push({
       id: 'pending-image', role: 'user', source: { kind: 'user' },

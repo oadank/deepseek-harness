@@ -224,7 +224,7 @@ describe('MessageItem arms', () => {
       await Promise.resolve()
     })
     expect(screen.getByRole('button', { name: '复制' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: '复制成功' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '已复制' })).toBeNull()
   })
 
   it('copy swaps to the check success chrome, gates re-clicks, and reverts after a second', async () => {
@@ -252,7 +252,7 @@ describe('MessageItem arms', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    const done = screen.getByRole('button', { name: '复制成功' })
+    const done = screen.getByRole('button', { name: '已复制' })
     fireEvent.click(done)
     expect(writeText).toHaveBeenCalledTimes(1)
     act(() => { vi.advanceTimersByTime(1000) })
@@ -301,7 +301,7 @@ describe('MessageItem arms', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(screen.getByRole('button', { name: '复制成功' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '已复制' })).toBeTruthy()
     mounted.unmount()
     expect(vi.getTimerCount()).toBe(0)
   })

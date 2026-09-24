@@ -25,6 +25,7 @@ const ATTACHMENT_ERROR_CODES = [
   'ATTACHMENT_READ_FAILED',
   'ATTACHMENT_PROJECTION_UNSUPPORTED',
   'ATTACHMENT_FILES_UNSUPPORTED',
+  'VOICE_ASR_FAILED',
 ] as const
 
 /** Stable attachment failure codes used for protocol error routing. */

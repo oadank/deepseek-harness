@@ -52,7 +52,13 @@ function decodeBase64Url(value: string): Buffer | undefined {
 function processLaunchToken(owner: object): string {
   const existing = PROCESS_LAUNCH_TOKENS.get(owner)
   if (existing !== undefined) return existing
-  const created = encodeBase64Url(randomBytes(SECRET_BYTES))
+  // [本地改造 0.1.5] 静态登录 token：设 DSH_WEB_TOKEN 后重启仍用同一 URL。
+  // 不影响 trust 栅栏（trustedHosts / Host/Origin / cookie 签名）——只是把
+  // 随机 process token 换成部署方固定的值，便于 tailscale 收藏链接。
+  const fixed = process.env.DSH_WEB_TOKEN
+  const created = typeof fixed === 'string' && fixed.length >= 16
+    ? fixed
+    : encodeBase64Url(randomBytes(SECRET_BYTES))
   PROCESS_LAUNCH_TOKENS.set(owner, created)
   return created
 }
@@ -226,6 +232,11 @@ export class BrowserAuth {
     return url.href
   }
 
+  /** [本地改造 2026-09-10] 相对形态的带 token 首页 URL（manifest start_url 用）。 */
+  indexRelativeUrl(): string {
+    return `/?${TOKEN_QUERY}=${encodeURIComponent(this.launchToken)}`
+  }
+
   /**
    * Authenticate an index request. A valid root query token mints the cookie
    * and redirects to the directory-relative clean `./`; a valid cookie lets
@@ -238,6 +249,35 @@ export class BrowserAuth {
   authorizeIndex(req: ConnectionIndexRequest, res: ConnectionIndexResponse): boolean {
     /* v8 ignore next -- node:http always supplies url on server requests. */
     const url = new URL(req.url ?? '/', 'http://dsh.invalid')
+    // [本地改造 2026-09-10] 路径式登录：GET /t/<token> —— iOS 主屏 PWA 会丢 query，
+    // token 放路径段不受影响；命中即铸 cookie 303 回 /，不匹配 401。
+    const pathToken = /^\/t\/([A-Za-z0-9_-]+)$/.exec(url.pathname)
+    if (pathToken !== null && req.method === 'GET') {
+      const authority = requestAuthority(req.headers)
+      const supplied = decodeURIComponent(pathToken[1] ?? '')
+      if (authority !== undefined && tokenMatches(supplied, this.launchToken)) {
+        const issuedAt = Date.now()
+        const expiresAt = issuedAt + this.maxAgeMilliseconds
+        const value = encodeCookie({
+          version: COOKIE_PAYLOAD_VERSION,
+          authority,
+          issuedAt,
+          expiresAt,
+        }, this.secret)
+        res.writeHead(303, {
+          'cache-control': 'no-store',
+          'location': '/',
+          'referrer-policy': 'no-referrer',
+          'set-cookie': sessionCookie(
+            cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000),
+          ),
+        })
+        res.end()
+        return false
+      }
+      this.writeUnauthorized(req, res)
+      return false
+    }
     const tokens = url.searchParams.getAll(TOKEN_QUERY)
     if (tokens.length > 0) {
       const authority = requestAuthority(req.headers)

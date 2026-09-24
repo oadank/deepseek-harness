@@ -25,7 +25,9 @@ import {
 import {
   assertNoActiveCompaction,
   compactSurfaceRegion,
+  overflowSummarizationInputBudget,
   selectCompactableRange,
+  summarizationInputBudget,
 } from './region.ts'
 import { summarizeWithLlm } from './summarizer.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
@@ -257,6 +259,56 @@ export class BasicCompactionEngine extends CompactionEngine {
   }
 
   /**
+   * Resolve one route's summarization input budget from its declared capacity.
+   * The budget reserves the summarization call's own output, so a compaction
+   * request cannot exceed the route's request ceiling.
+   * @param target - exact routed provider/model the summarization call runs on.
+   * @param maxTokens - output tokens that call reserves.
+   * @param measuredTokens - priced total of the request being recovered, used when the route
+   *   declares no capacity.
+   * @param signal - cancellation forwarded to model-capacity resolution.
+   * @returns the capacity and the replayed-prefix budget in tokens.
+   */
+  private async summarizationBudget(
+    target: Pick<LlmCallConfig, 'provider' | 'model'>,
+    maxTokens: number,
+    measuredTokens: number,
+    signal: AbortSignal,
+  ): Promise<{ contextWindow: number | undefined; inputBudget: number }> {
+    const context = await this.resolveRouteContextWindow(target, signal)
+    if (context === undefined) {
+      return { contextWindow: undefined, inputBudget: overflowSummarizationInputBudget(measuredTokens) }
+    }
+    return {
+      contextWindow: context,
+      inputBudget: summarizationInputBudget(context, maxTokens),
+    }
+  }
+
+  /**
+   * Read one route's declared context capacity, tolerating a route this
+   * deployment cannot resolve at all. Overflow recovery must proceed for a
+   * routed model with no registered adapter, exactly as it must for one that
+   * declares no capacity.
+   * @param target - exact routed provider/model whose capacity is read.
+   * @param signal - cancellation forwarded to model-capacity resolution.
+   * @returns the declared context window, or `undefined` when none is knowable.
+   */
+  private async resolveRouteContextWindow(
+    target: Pick<LlmCallConfig, 'provider' | 'model'>,
+    signal: AbortSignal,
+  ): Promise<number | undefined> {
+    try {
+      return (await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal)).context?.contextWindow
+    } catch {
+      // Routes without a registered adapter cannot declare capacity; recovery
+      // still proceeds, because it is triggered by a provider-confirmed
+      // overflow rather than by a capacity the route should have declared.
+      return undefined
+    }
+  }
+
+  /**
    * Compact for replayed step-boundary pressure or one provider-confirmed context
    * overflow. Both triggers price the latest durable routed request envelope;
    * overflow bypasses the normal threshold and retained-tail policy so it can
@@ -292,11 +344,17 @@ export class BasicCompactionEngine extends CompactionEngine {
     const prune = this.ctx.get('toolResultPruner')
 
     if (trigger === 'context-overflow') {
+      const { inputBudget } = await this.summarizationBudget(
+        target,
+        policy.maxTokens,
+        measurement.totalTokens,
+        signal,
+      )
       if (prune !== undefined) {
         prune.pruneSession(agent.session)
         measurement = meter.measure(agent.session)
       }
-      const range = selectCompactableRange(agent.session, measurement, 0)
+      const range = selectCompactableRange(agent.session, measurement, 0, inputBudget)
       if (range === null) return null
       return this.compactRegion(range.start, range.end, agent, signal)
     }
@@ -327,8 +385,9 @@ export class BasicCompactionEngine extends CompactionEngine {
     if (measurement.totalTokens < spec.thresholdTokens) return null
 
     let result: CompactionResult | null = null
+    const inputBudget = summarizationInputBudget(context.contextWindow, spec.maxTokens)
     for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
-      const range = selectCompactableRange(agent.session, measurement, spec.retainTokens)
+      const range = selectCompactableRange(agent.session, measurement, spec.retainTokens, inputBudget)
       if (range === null) {
         /* v8 ignore else -- concrete replacement preserves a compactable checkpoint; subclass hooks cannot mutate it. */
         if (result === null) return null
@@ -391,10 +450,28 @@ export class BasicCompactionEngine extends CompactionEngine {
         const operationSignal = AbortSignal.any([agentSignal, signal])
         try {
           operationSignal.throwIfAborted()
+          const target = routedTarget(agent.session)
+          if (target === undefined) throw new Error(
+            'compaction-basic: no routed provider/model for manual compaction',
+          )
+          const maxTokens = resolveTargetPolicy(this.config, target).maxTokens
+          const measured = this.ctx.tokenMeter.measure(agent.session)
+          const { inputBudget, contextWindow } = await this.summarizationBudget(
+            target,
+            maxTokens,
+            measured.totalTokens,
+            operationSignal,
+          )
+          if (contextWindow === undefined) throw new TargetPressureConfigError(
+            `${target.provider}/${target.model}`,
+            `compaction-basic: no context capacity for ${target.provider}/${target.model}; `
+            + 'configure contextWindow on that adapter model',
+          )
           const range = selectCompactableRange(
             agent.session,
-            this.ctx.tokenMeter.measure(agent.session),
+            measured,
             0,
+            inputBudget,
           )
           if (range === null) return null
           return await compactSurfaceRegion(

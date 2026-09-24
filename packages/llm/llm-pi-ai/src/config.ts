@@ -14,7 +14,7 @@
  */
 import type { Volatile } from '@deepseek-ai/cordis'
 
-import type { CacheRetention, ChatTemplateKwargValue, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
+import type { Api, CacheRetention, ChatTemplateKwargValue, Model, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
@@ -208,6 +208,12 @@ export interface ResolvedPiAiProviderProfile
   piProvider?: Provider
   /** First model diagnostic, or the route failure when no model diagnostic is available. */
   catalogError?: string
+  /**
+   * Materialized serviceable models from the catalog resolution. Survives a
+   * failed `piProvider` build so the advisory selector can still list them
+   * (listModels) even when streaming cannot.
+   */
+  serviceableModels: readonly Model<Api>[]
   /** Per-model failures reported before attempting a request. */
   modelErrors: ReadonlyMap<string, string>
   /**
@@ -216,6 +222,11 @@ export interface ResolvedPiAiProviderProfile
    * own, so a catalog capability must not appear here.
    */
   configuredMaxTokens: ReadonlyMap<string, number>
+  /**
+   * Alias/name → canonical model id for this route, so a renamed wire id
+   * keeps resolving stored `agent-default-model` and session selections.
+   */
+  modelAliases: ReadonlyMap<string, string>
 }
 
 /** Plugin configuration: the provider routes this instance owns. */
@@ -302,6 +313,7 @@ const reasoningEfforts = z.dict(
 /** The fields a `models` entry and a `modelOverrides` value share; only the id's home differs. */
 const modelFields = {
   name: z.string(),
+  aliases: z.array(z.string()),
   contextWindow: z.number().step(1).min(1),
   maxTokens: z.number().step(1).min(1),
   // No explicit default, unlike the route's `defaultInput`: schemastery
@@ -502,6 +514,8 @@ export function resolveProfiles(
       ...rest.thinkingBudgets === undefined ? {} : { thinkingBudgets: { ...rest.thinkingBudgets } },
       configuredMaxTokens: catalog?.configuredMaxTokens ?? new Map(),
       modelErrors: catalog?.modelErrors ?? new Map(),
+      modelAliases: catalog?.modelAliases ?? new Map(),
+      serviceableModels: catalog?.models ?? [],
       ...piProvider === undefined ? {} : { piProvider },
       ...catalogError === undefined ? {} : { catalogError },
     })

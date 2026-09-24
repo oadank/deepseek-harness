@@ -122,13 +122,13 @@ describe('command-compact real Loader composition', () => {
     expect(context.commands.list(agent)).toContainEqual({
       definitionId: '@deepseek-ai/dsh-command-compact',
       name: 'compact',
-      description: 'Compact older conversation history',
+      description: '压缩较早的对话历史',
     })
     const execution = await context.commands.execute(agent, '/compact', [], new AbortController().signal)
     if (execution === undefined) throw new Error('Loader composition did not resolve /compact')
     expect(execution.result).toEqual({
       kind: 'success',
-      text: 'Compacted 3 history items (~99 tokens).',
+      text: '已压缩 3 条历史（约 99 tokens）。',
       sourceEventSeq: RESULT.summarySeq,
     })
     expect(session.snapshotEvents().map(event => ({ type: event.type, data: event.data }))).toEqual([
@@ -175,7 +175,7 @@ describe('command-compact real Loader composition', () => {
         data: {
           commandId: execution.commandId,
           kind: 'success',
-          text: 'Compacted 3 history items (~99 tokens).',
+          text: '已压缩 3 条历史（约 99 tokens）。',
           sourceEventSeq: RESULT.summarySeq,
         },
       },

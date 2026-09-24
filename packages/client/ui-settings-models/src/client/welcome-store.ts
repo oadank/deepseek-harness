@@ -73,6 +73,9 @@ export class WelcomeNoticeStore {
    * @returns true when the selected persistence mode holds the acknowledgement.
    */
   async acknowledge(): Promise<boolean> {
+    try {
+      globalThis.localStorage?.setItem('dsh.welcomeNoticeAck', WELCOME_NOTICE_VERSION)
+    } catch { /* ignore */ }
     if (this.scope.getSnapshot().mode === 'memory') {
       this.localAcknowledged = true
       this.derive()
@@ -125,7 +128,8 @@ export class WelcomeNoticeStore {
         })
         return
       case 'ready': {
-        const acknowledged = scope.value?.[WELCOME_NOTICE_ACK_FIELD] === WELCOME_NOTICE_VERSION
+        let acknowledged = scope.value?.[WELCOME_NOTICE_ACK_FIELD] === WELCOME_NOTICE_VERSION
+        if (!acknowledged && this.localAcknowledged) acknowledged = true
         this.store.update((state) => {
           state.status = 'ready'
           state.acknowledged = acknowledged

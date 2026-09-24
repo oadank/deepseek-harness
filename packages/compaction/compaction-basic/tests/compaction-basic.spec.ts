@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
 import type { BasicCompactionConfig } from '@deepseek-ai/dsh-compaction-basic'
-import { selectCompactableRange } from '@deepseek-ai/dsh-compaction-basic/src/region.ts'
+import { selectCompactableRange, summarizationInputBudget } from '@deepseek-ai/dsh-compaction-basic/src/region.ts'
 import { frameSummary } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
 import type { SummarizationInput, SummaryResult } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
 import { CompactionId, toolPairingBalancedAfter, toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'
@@ -765,7 +765,12 @@ describe('pressure measurement and retention', () => {
     const [head, firstUser] = session.surface.nodes
     expect(session.eventAt(head!)?.type).toBe('system/message')
 
-    const range = selectCompactableRange(session, ctx.tokenMeter.measure(session), compactConfig.retainTokens!)
+    const range = selectCompactableRange(
+      session,
+      ctx.tokenMeter.measure(session),
+      compactConfig.retainTokens!,
+      Number.MAX_SAFE_INTEGER,
+    )
     expect(range?.start).toBe(firstUser)
 
     const result = await compactIfNeeded(compact, session)
@@ -781,13 +786,56 @@ describe('pressure measurement and retention', () => {
     expect(compact.calls[0]!.input.messages.filter(message => message.role === 'system')).toHaveLength(1)
   })
 
+  it('holds the replayed prefix under the summarization input budget', () => {
+    const ctx = createContext()
+    const session = conversation(8)
+    const priced = ctx.tokenMeter.measure(session)
+    const full = selectCompactableRange(session, priced, 1, Number.MAX_SAFE_INTEGER)
+    expect(full).not.toBeNull()
+
+    // Two tokens admit the first user message and nothing after it: the range
+    // shortens at its tail while its start stays the earliest compactable node.
+    // A budget of three fixture messages admits the oldest three nodes: the
+    // range shortens at its tail while its start stays the earliest compactable node.
+    const budget = 3 * priced.nodes[0]!.heuristicTokens
+    const bounded = selectCompactableRange(session, priced, 1, budget)
+    expect(bounded).not.toBeNull()
+    expect(bounded!.start).toBe(full!.start)
+    const kept = priced.nodes
+      .slice(priced.nodes.findIndex(node => node.seq === bounded!.start), priced.nodes.findIndex(node => node.seq === bounded!.end) + 1)
+      .reduce((total, node) => total + node.tokens, 0)
+    expect(kept).toBeLessThanOrEqual(budget)
+    expect(kept).toBeLessThan(
+      priced.nodes.reduce((total, node) => total + node.tokens, 0),
+    )
+    // A budget below the first compactable node's own price cannot shorten the
+    // range, so the candidate survives rather than disappearing.
+    const tinyBudget = priced.nodes[0]!.tokens - 1
+    expect(selectCompactableRange(session, priced, 1, tinyBudget)?.end).toBe(full!.end)
+  })
+
+  it('reserves the summarization output and a safety margin inside the request budget', () => {
+    // Measured 2026-09-22: gw/dsv4f declares 524288 and the gateway refuses
+    // input above 516096. Both bounds apply, so a route declaring a larger
+    // window is bounded by the gateway ceiling, not by its declaration.
+    expect(summarizationInputBudget(524_288, 8_192)).toBe(467_271)
+    expect(summarizationInputBudget(1_000_000, 8_192)).toBe(467_271)
+    expect(summarizationInputBudget(1_000_000, 8_192)).toBeLessThan(516_096)
+    expect(summarizationInputBudget(1_024, 8_192)).toBe(512)
+  })
+
   it('declines when only the system head precedes the retained tail', () => {
     const ctx = createContext()
     const session = conversation(1, undefined, 'SYSTEM HEAD')
     const priced = ctx.tokenMeter.measure(session)
     const [, user, assistant] = priced.nodes
     expect(priced.nodes).toHaveLength(3)
-    expect(selectCompactableRange(session, priced, user!.tokens + assistant!.tokens)).toBeNull()
+    expect(selectCompactableRange(
+      session,
+      priced,
+      user!.tokens + assistant!.tokens,
+      Number.MAX_SAFE_INTEGER,
+    )).toBeNull()
   })
 
   it('counts the durable routed request envelope without putting it on the surface', async () => {
@@ -903,7 +951,7 @@ describe('pressure measurement and retention', () => {
     expect(() => selectCompactableRange(session, {
       ...priced,
       nodes: priced.nodes.slice(1),
-    }, 1)).toThrow(/does not match/)
+    }, 1, Number.MAX_SAFE_INTEGER)).toThrow(/does not match/)
   })
 
   it('declines when rounding a cut would consume the only tool pair', () => {
@@ -938,7 +986,7 @@ describe('pressure measurement and retention', () => {
     session.append('step/end', { turn: 1, step: 1 })
 
     const priced = ctx.tokenMeter.measure(session)
-    expect(selectCompactableRange(session, priced, 1)).toBeNull()
+    expect(selectCompactableRange(session, priced, 1, Number.MAX_SAFE_INTEGER)).toBeNull()
   })
 })
 
@@ -2256,8 +2304,8 @@ describe('route-priced image pressure', () => {
 
     // The same verbatim tail budget retains almost everything under the
     // neutral heuristic but forces a cut once visual tokens are counted.
-    expect(selectCompactableRange(session, neutral, 350)).toBeNull()
-    const range = selectCompactableRange(session, routed, 350)
+    expect(selectCompactableRange(session, neutral, 350, Number.MAX_SAFE_INTEGER)).toBeNull()
+    const range = selectCompactableRange(session, routed, 350, Number.MAX_SAFE_INTEGER)
     expect(range).not.toBeNull()
   })
 

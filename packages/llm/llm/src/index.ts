@@ -35,7 +35,7 @@ import { HarnessError, INVALID_CREDENTIAL_CODE } from './error.ts'
 import { normalizeLlmFailure } from './adapter-failure.ts'
 import { normalizeApiKey } from './api-key.ts'
 import {
-  contentHasFile, contentHasImage, fileHandleText, projectFilesToText, projectImagesForTextModel,
+  contentHasFile, contentHasImage, fileHandleText, projectFilesToText, projectImagesForTextModel, projectVoicesToText,
 } from './content.ts'
 import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
@@ -230,6 +230,15 @@ export abstract class LlmAdapter {
    * @returns route-owned image pricing, or `undefined` when the route declares none.
    */
   imageRequestPricing(_provider: string, _model: string): LlmImageRequestPricing | undefined {
+    return undefined
+  }
+
+  /**
+   * [本地改造 2026-08-28] How this adapter wants text-only models to see images.
+   * `'path'` skips the official sha-digest projection so serialize can convert
+   * image blocks into local-path text (look_image / vision MCP).
+   */
+  get textImageHandling(): 'path' | 'omit' | undefined {
     return undefined
   }
 
@@ -1051,8 +1060,12 @@ export class LlmRuntime extends TypertRemoteService {
       if (projectedMessages.some(message => contentHasFile(message.content))) {
         projectedMessages = projectFilesToText(projectedMessages, ref => this.fileReadPath(ref))
       }
+      // [本地改造 2026-08-16 · 0.1.7 重落] 没有任何 provider 原生表示语音块（会抛 UNSUPPORTED_CONTENT），
+      // 所以在此统一投影：识别文本优先，否则给本地语音路径由 agent 走本机 ASR。
+      projectedMessages = projectVoicesToText(projectedMessages)
       if (modelInfo.inputModalities !== undefined
         && !modelInfo.inputModalities.includes('image')
+        && adapter.textImageHandling !== 'path'
         && projectedMessages.some(message => contentHasImage(message.content))) {
         projectedMessages = projectImagesForTextModel(projectedMessages)
       }

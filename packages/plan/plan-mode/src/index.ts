@@ -232,8 +232,8 @@ export class PlanModeController extends Service {
       commandCtx.commands.register({
         definitionId: brandString<CommandDefinitionId>('@deepseek-ai/dsh-plan-mode'),
         name: 'plan',
-        description: 'Enter or leave plan mode',
-        input: { hint: '[off|message]', attachments: true },
+        description: '进入或退出计划模式',
+        input: { hint: '[off|消息]', attachments: true },
         handler: ({ agent, rawInput, attachments }) => {
           const message = rawInput.trim()
           if (message === 'off' && attachments.length > 0) {
@@ -242,18 +242,18 @@ export class PlanModeController extends Service {
           if (message === 'off') {
             switch (this.set(agent, false)) {
               case 'committed':
-                return { kind: 'success', text: 'Plan mode off.' }
+                return { kind: 'success', text: '计划模式已关闭。' }
               case 'queued':
-                return { kind: 'success', text: 'Leaving plan mode (applies from the next step).' }
+                return { kind: 'success', text: '正在退出计划模式（从下一步生效）。' }
               case 'cancelled':
-                return { kind: 'success', text: 'Plan mode entry cancelled.' }
+                return { kind: 'success', text: '计划模式进入已取消。' }
               case 'noop':
                 // Repeat the queued wording while an exit still awaits the
                 // next accepted pre-step; only a truly inactive session reads
                 // idempotent.
                 return this.loggedActive(agent.session)
-                  ? { kind: 'success', text: 'Leaving plan mode (applies from the next step).' }
-                  : { kind: 'success', text: 'Plan mode is already inactive.' }
+                  ? { kind: 'success', text: '正在退出计划模式（从下一步生效）。' }
+                  : { kind: 'success', text: '计划模式已处于关闭状态。' }
             }
           }
           const outcome = this.set(agent, true)
@@ -269,8 +269,8 @@ export class PlanModeController extends Service {
           return {
             kind: 'success',
             text: outcome === 'committed'
-              ? 'Plan mode on. Use /plan off to leave.'
-              : 'Entering plan mode (applies from the next step). Use /plan off to leave.',
+              ? '计划模式已开启。使用 /plan off 退出。'
+              : '正在进入计划模式（从下一步生效）。使用 /plan off 退出。',
           }
         },
       })

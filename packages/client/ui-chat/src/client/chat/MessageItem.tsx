@@ -5,24 +5,31 @@ import type { MessageImageSource } from '@deepseek-ai/dsh-client-ui-conversation
 import { fileExtension, FileTypeIcon, fileSizeText, JsonBlock, projectUserText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
 import type { ModelRetryNode, TurnErrorNode, UserMessageNode } from '../contract/snapshot.ts'
+import type { VoiceAttachmentRef } from '../contract/chat-nodes.ts'
 import { CompactionItem } from './CompactionItem.tsx'
 import { ContextInjectionRow } from './ContextInjectionRow.tsx'
 import { MessageIconActions } from './MessageIconActions.tsx'
+import { VoiceCard } from './VoiceCard.tsx'
 import css from './MessageItem.module.css'
 
 type UserImage = Extract<UserMessageNode['content'][number], { type: 'image' }>
 type UserFile = Extract<UserMessageNode['content'][number], { type: 'file' }>
+type UserVoice = Extract<UserMessageNode['content'][number], { type: 'voice' }>
 type PresentedAttachment =
   | { readonly type: 'image'; readonly image: MessageImageSource }
   | { readonly type: 'file'; readonly file: UserFile['attachment'] }
 
+// [本地改造 2026-09-11 / 抄自 pre-merge ui-conversation] voices 独立于 attachments：
+// VoiceCard 渲染在附件行之外、气泡之前，容器不同，样式与旧版一致。
 function contentParts(content: readonly unknown[]): {
   text: string
   attachments: PresentedAttachment[]
+  voices: { attachment: VoiceAttachmentRef }[]
   rest: unknown[]
 } {
   const texts: string[] = []
   const attachments: PresentedAttachment[] = []
+  const voices: { attachment: VoiceAttachmentRef }[] = []
   const rest: unknown[] = []
   for (const block of content) {
     const b = block as { type?: string; text?: string; attachment?: unknown }
@@ -33,9 +40,12 @@ function contentParts(content: readonly unknown[]): {
     else if (b.type === 'file' && b.attachment !== undefined) {
       attachments.push({ type: 'file', file: (b as UserFile).attachment })
     }
+    else if (b.type === 'voice' && b.attachment !== undefined) {
+      voices.push({ attachment: (b as UserVoice).attachment as VoiceAttachmentRef })
+    }
     else rest.push(block)
   }
-  return { text: texts.join(''), attachments, rest }
+  return { text: texts.join(''), attachments, voices, rest }
 }
 
 function retrySeconds(milliseconds: number): number {
@@ -156,7 +166,7 @@ function TurnMaxTokensItem({ t }: {
 /** Right-aligned bubble shared by user and steering rows. */
 function UserStyleBubble({
   content, renderMessageImages, actions, pending = false, echo = false, referenceLabels = [], skillNames = [],
-  previewAttachments, references, t,
+  previewAttachments, references, t, voiceLoader, voiceAsrFailedHint = false,
 }: {
   content: readonly unknown[]
   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
@@ -173,9 +183,13 @@ function UserStyleBubble({
   /** Local submission-echo attachments replacing the content-derived attachment sequence. */
   previewAttachments?: readonly PresentedAttachment[]
   references?: Pick<ChatNodeOwnerProps, 'openFile' | 'openSkill'>
+  /** [抄自 pre-merge] Session-authorized voice loader（调用方兜底 reject）。 */
+  voiceLoader: (ref: VoiceAttachmentRef) => Promise<string>
+  /** [抄自 pre-merge] 语音无转写时显示「未能识别」提示（用户消息才开）。 */
+  voiceAsrFailedHint?: boolean
   t: ChatViewSlotProps['t']
 }): ReactNode {
-  const { text, attachments: contentAttachments, rest } = contentParts(content)
+  const { text, attachments: contentAttachments, voices, rest } = contentParts(content)
   const attachments = previewAttachments ?? contentAttachments
   const compactImages = attachments.length > 1
   const truncated = (total: number): string => t('json.truncated', { total })
@@ -213,6 +227,16 @@ function UserStyleBubble({
               ))}
           </div>
         )}
+        {/* [抄自 pre-merge] 用户语音横幅：附件行之外、气泡之前，与旧版位置/样式一致 */}
+        {voices.map((voice, i) => (
+          <VoiceCard
+            key={i}
+            attachment={voice.attachment}
+            load={voiceLoader}
+            asrFailedHint={voiceAsrFailedHint}
+            t={t}
+          />
+        ))}
         {showBubble && <div className={css.bubble}>
           {projectUserText(text, referenceLabels, skillNames, 'skill', references)}
           {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
@@ -234,15 +258,18 @@ function UserStyleBubble({
  * @param props - Pending message content and conversation translator.
  * @returns the pending steering bubble.
  */
-export function PendingSteeringBubble({ content, renderMessageImages, t }: {
+export function PendingSteeringBubble({ content, renderMessageImages, loadVoice, t }: {
   content: readonly unknown[]
   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
+  loadVoice?: ((ref: VoiceAttachmentRef) => Promise<string>) | undefined
   t: ChatViewSlotProps['t']
 }): ReactNode {
+  const voiceLoader = loadVoice ?? (() => Promise.reject(new Error(t('voice.loadFailed'))))
   return (
     <UserStyleBubble
       content={content}
       renderMessageImages={renderMessageImages}
+      voiceLoader={voiceLoader}
       pending
       t={t}
       actions={text => (
@@ -295,6 +322,7 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }: 
       content={content}
       previewAttachments={previewAttachments}
       renderMessageImages={renderMessageImages}
+      voiceLoader={() => Promise.reject(new Error(t('voice.loadFailed')))}
       pending={submission.placement === 'steering'}
       echo
       t={t}
@@ -313,14 +341,18 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }: 
 
 /** User and admitted-steering keyed Chat renderer. */
 export const UserMessageNodeView = memo(function UserMessageNodeView({
-  node, renderMessageImages, openFile, openSkill, t,
+  node, renderMessageImages, openFile, openSkill, t, loadVoice,
 }: ChatNodeViewProps<'user' | 'steering'>) {
   const data = node.data
+  // [抄自 pre-merge] loader 缺失（无语音通道部署）时兜底 reject，卡片降级为禁用态而非崩溃。
+  const voiceLoader = loadVoice ?? (() => Promise.reject(new Error(t('voice.loadFailed'))))
   return (
     <UserStyleBubble
       content={data.content}
       references={{ openFile, openSkill }}
       renderMessageImages={renderMessageImages}
+      voiceLoader={voiceLoader}
+      voiceAsrFailedHint
       {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
       {...data.skillNames === undefined ? {} : { skillNames: data.skillNames }}
       t={t}

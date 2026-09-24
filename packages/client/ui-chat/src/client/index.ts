@@ -12,6 +12,8 @@ export type {} from './conversation-nodes/turn-error.ts'
 export type {} from './conversation-nodes/turn-max-tokens.ts'
 export type {} from './conversation-nodes/turn-process.ts'
 export type {} from './conversation-nodes/turn-tail.ts'
+export type {} from './conversation-nodes/voice-reply.ts'
+export type {} from './conversation-nodes/image-reply.ts'
 
 export type {
   AssistantBlock, AssistantMessageNode, AssistantProviderMetadataView, AssistantRequestConfig,
@@ -24,8 +26,8 @@ export type {
 } from './contract/snapshot.ts'
 export type {
   AssistantChatData, ChatConversationViewNode, ChatNode, ChatNodeKind,
-  FinalAssistantChatData, ManualCompactionChatData, RetryChatData, ToolChatData,
-  TurnProcessChatData, TurnTailChatData,
+  FinalAssistantChatData, ImageReplyChatData, ManualCompactionChatData, RetryChatData,
+  ToolChatData, TurnProcessChatData, TurnTailChatData, VoiceAttachmentRef, VoiceReplyChatData,
 } from './contract/chat-nodes.ts'
 export type { ChatStoreState, ToolCallId, TurnProcessViewEntry } from './contract/store.ts'
 export type { TranscriptViewRowInjected, TranscriptViewRowProps } from './settings/TranscriptViewRow.tsx'

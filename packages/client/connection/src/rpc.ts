@@ -235,6 +235,12 @@ export interface HostConnectionHandle {
    * @returns tokenized URL for initial login; a mount proxy strips its prefix before {@link authorizeIndex}.
    */
   authenticatedUrl(baseUrl: string): string
+
+  /**
+   * [本地改造 2026-09-10] 相对形态的带 token 首页 URL（manifest start_url 注入用）。
+   * @returns '/?token=&lt;process token&gt;'。
+   */
+  indexRelativeUrl(): string
 }
 
 /** Transport-independent Fetch handler used by HTTP and worker carriers. */

@@ -142,7 +142,14 @@ function directoryEntries(
   }
   for (const provider of catalog) declare(provider, provider)
   for (const [provider, profile] of profiles) declare(provider, profile.displayName, profile.catalogError)
-  return [...entries.values()]
+  // Configured hand-declared routes (gw/qwen/…) first so Models shows them
+  // above the huge unused catalog list after 0.1.5's expanded directory.
+  const profileOrder = [...profiles.keys()]
+  const catalogOnly = [...entries.keys()].filter(id => catalog.has(id) && !profiles.has(id))
+  return [
+    ...profileOrder.map(id => entries.get(id)!),
+    ...catalogOnly.map(id => entries.get(id)!),
+  ]
 }
 
 /** Register one generic pi-ai adapter for all configured provider routes. */
@@ -305,10 +312,40 @@ export function apply(ctx: Context, config: Config): void {
     }
     registeredFacts = facts
   }
+  /**
+   * [本地改造 2026-09-XX] Rewrite a dangling `agent-default-model` after a
+   * models-list edit. Model `id` is the wire name and freely editable, while
+   * stored defaults hold raw id strings, so one rename would otherwise brick
+   * every future turn: move the default to the alias or name hit, else to the
+   * route's first serviceable model.
+   */
+  const migrateDanglingDefault = (): void => {
+    const defaults = ctx.get('agentDefaultModel')
+    if (defaults === undefined || defaults.saveSelection === undefined) return
+    try {
+      const selected = defaults.currentSelection()
+      const profile = profiles().get(selected.provider)
+      if (profile === undefined || profile.serviceableModels.length === 0) return
+      const aliasTo = profile.modelAliases.get(selected.model)
+      const matched = aliasTo === undefined
+        ? profile.serviceableModels.find(entry => entry.id === selected.model || entry.name === selected.model)
+        : profile.serviceableModels.find(entry => entry.id === aliasTo)
+      const target = matched ?? profile.serviceableModels[0]
+      if (target === undefined || target.id === selected.model) return
+      void defaults.saveSelection({ provider: selected.provider, model: target.id }).catch(() => {})
+      ctx.logger.warn(
+        `llm-pi-ai: agent-default-model "${selected.provider}/${selected.model}" is gone;`
+        + ` migrated to "${target.id}"`,
+      )
+    } catch {
+      // Best-effort repair: a broken default must not block settings reload.
+    }
+  }
   ensureRegistrationFacts()
+  migrateDanglingDefault()
 
   ctx.on('loader/volatile-update', () => {
-    try { ensureRegistrationFacts(); ensureDirectory() }
+    try { ensureRegistrationFacts(); ensureDirectory(); migrateDanglingDefault() }
     catch (error) {
       ctx.logger.error('llm-pi-ai: configuration conflicts with an existing provider route')
       ctx.logger.error(error)

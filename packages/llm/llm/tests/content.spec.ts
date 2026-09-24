@@ -10,6 +10,7 @@ import {
   projectFilesToText,
   offloadedImageText,
   projectImagesForTextModel,
+  projectVoicesToText,
   projectOffloadedImages,
   requiredImageOffload,
   resolveImageAttachmentAccess,
@@ -297,18 +298,87 @@ describe('projectImagesForTextModel', () => {
       isError: false,
     })
 
-    const projected = projectImagesForTextModel([plain, visual, unchangedTool, visualTool])
-    expect(projected[0]).toBe(plain)
-    expect(projected[1]?.content).toEqual([
+    // [本地改造 2026-09-10] 本地路径文案随 DSH 主目录变化，测试固定桩目录保证跨机器确定性。
+    const stubHome = '/stub-home'
+    const omittedImage = `[image omitted because this model accepts text only; attachment sha256:aaaaaaaa; 本地文件路径 ${stubHome}/attachments/v1/objects/aa/${'a'.repeat(64)}（无扩展名内容寻址对象，直接以 image_path 参数调用 look_image 工具识图：默认 describe=看图描述；要求像素级反推用 task="reverse"；提取图中文字用 task="text"。路径可能无扩展名，直接 readFile 即可。）]`
+    const previousHome = process.env.DSH_HOME
+    process.env.DSH_HOME = stubHome
+    try {
+      const projected = projectImagesForTextModel([plain, visual, unchangedTool, visualTool])
+      expect(projected[0]).toBe(plain)
+      expect(projected[1]?.content).toEqual([
+        { type: 'text', text: 'lead' },
+        { type: 'text', text: omittedImage },
+      ])
+      expect(projected[2]).toBe(unchangedTool)
+      expect(projected[3]?.content).toEqual([
+        { type: 'text', text: 'before' },
+        { type: 'text', text: omittedImage },
+        { type: 'text', text: 'after' },
+      ])
+    } finally {
+      if (previousHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previousHome
+    }
+  })
+})
+
+// [本地改造 2026-08-16] 语音块在请求装配处统一投影：没有任何 provider 原生表示语音。
+describe('voice projection', () => {
+  const voiceId = `sha256:${'b'.repeat(64)}`
+
+  function voice(transcript?: string, durationMs?: number): Extract<ContentBlock, { type: 'voice' }> {
+    return {
+      type: 'voice',
+      attachment: {
+        voiceId,
+        mediaType: 'audio/webm',
+        bytes: 100,
+        ...(durationMs === undefined ? {} : { durationMs }),
+        ...(transcript === undefined ? {} : { transcript }),
+      },
+    }
+  }
+
+  it('hands the recorded transcript straight to the model with its duration', () => {
+    const [message] = projectVoicesToText([createUserMessage({
+      content: [{ type: 'text', text: 'lead' }, voice('帮我查一下明天的天气', 3200)],
+      source,
+    })])
+    expect(message?.content).toEqual([
       { type: 'text', text: 'lead' },
-      { type: 'text', text: '[image omitted because this model accepts text only; attachment sha256:aaaaaaaa]' },
+      { type: 'text', text: '[用户发送了一条语音（时长 3 秒），识别内容：帮我查一下明天的天气]' },
     ])
-    expect(projected[2]).toBe(unchangedTool)
-    expect(projected[3]?.content).toEqual([
-      { type: 'text', text: 'before' },
-      { type: 'text', text: '[image omitted because this model accepts text only; attachment sha256:aaaaaaaa]' },
-      { type: 'text', text: 'after' },
-    ])
+  })
+
+  it('falls back to the durable object path for the host ASR when nothing was recorded', () => {
+    const previousHome = process.env.DSH_HOME
+    process.env.DSH_HOME = '/stub-home'
+    try {
+      const [message] = projectVoicesToText([createUserMessage({ content: [voice()], source })])
+      expect(message?.content).toEqual([{
+        type: 'text',
+        text: `[用户发送了一条语音，本地语音文件路径: /stub-home/attachments/v1/objects/bb/${'b'.repeat(64)}。请调用本机语音识别服务转写后再回答；路径可能无扩展名，直接读取即可。]`,
+      }])
+    } finally {
+      if (previousHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previousHome
+    }
+  })
+
+  it('clears a voice nested in a tool result and leaves voice-free turns untouched', () => {
+    const nested = createToolResultMessage({
+      callId: ToolCallId('voice-result'),
+      content: [{ type: 'text', text: 'said' }, voice('收到')],
+      isError: false,
+    })
+    const plain = createUserMessage({ content: [{ type: 'text', text: 'text only' }], source })
+    const projected = projectVoicesToText([plain, nested])
+    expect(projected[0]).toBe(plain)
+    const block = projected[1]?.content[0]
+    expect(block?.type).toBe('tool-result')
+    const inner = block?.type === 'tool-result' ? block.content : []
+    expect(inner).toEqual([{ type: 'text', text: 'said' }, { type: 'text', text: '[用户发送了一条语音，识别内容：收到]' }])
   })
 })
 

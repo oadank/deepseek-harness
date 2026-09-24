@@ -193,6 +193,26 @@ export function catalogProviderIds(): readonly string[] {
 }
 
 /**
+ * Whether the installed catalog provider for one route declares an api-key
+ * method — the only authentication this adapter obtains on its own.
+ *
+ * A key is what the harness resolves through its own credential seam and hands
+ * pi-ai per request. pi-ai's other method, OAuth, resolves from a *stored*
+ * OAuth credential alone: `resolveProviderAuth` has no ambient path for it,
+ * this adapter builds its `Models` collection with no credential store, and
+ * nothing here runs a login flow. So a provider offering OAuth by itself
+ * leaves nothing for this adapter to authenticate with, and the posture such a
+ * provider invites — no key configured, credentials discovered by the provider
+ * — fails every request with `Provider is not configured`.
+ * @param provider - provider route key.
+ * @returns whether the catalog provider takes an api key; false for a route
+ *   pi-ai does not ship, which the caller answers for separately.
+ */
+export function catalogProviderTakesApiKey(provider: string): boolean {
+  return catalogProvider(provider)?.auth.apiKey !== undefined
+}
+
+/**
  * The installed catalog models for one route, indexed by model id.
  * @param provider - provider route key.
  * @returns catalog models by id; empty for a route pi-ai does not ship.
@@ -576,6 +596,13 @@ export interface PiAiModelProfile {
   id: string
   /** Display name for selectors; defaults to the catalog name, then the id. */
   name?: string
+  /**
+   * Extra lookup keys that resolve to this model without changing the wire id.
+   * Session history and `agent-default-model` store raw ids; renaming `id`
+   * would otherwise brick every stored reference. List retired ids here (or
+   * let the host auto-append them when it migrates a dangling default).
+   */
+  aliases?: string[]
   /** Maximum combined request and response context in tokens. */
   contextWindow?: number
   /**
@@ -814,6 +841,11 @@ export interface RouteCatalog {
    * picked, so only an explicit configuration lands here.
    */
   configuredMaxTokens: ReadonlyMap<string, number>
+  /**
+   * Alias → canonical model id. Built from each entry's `aliases`, so a
+   * renamed `id` keeps resolving stored session/default references.
+   */
+  modelAliases: ReadonlyMap<string, string>
 }
 
 /**
@@ -840,6 +872,21 @@ export function resolveRouteModels(
   const modelErrors = new Map<string, string>()
   // Writes reject missing referents. Stored overrides retain a diagnostic
   // after catalog removal rather than silently disappearing.
+  const modelAliases = new Map<string, string>()
+  const claimAlias = (alias: string, canonical: string, soft = false): void => {
+    if (alias.length === 0 || alias === canonical) return
+    const existing = modelAliases.get(alias)
+    if (existing !== undefined && existing !== canonical) {
+      // Display names may collide across models; explicit aliases must not.
+      if (soft) return
+      invalid(provider, `model alias "${alias}" is claimed by both "${existing}" and "${canonical}"`)
+    }
+    modelAliases.set(alias, canonical)
+  }
+  for (const entry of configured) {
+    for (const alias of entry.aliases ?? []) claimAlias(alias, entry.id)
+    if (entry.name !== undefined && entry.name !== entry.id) claimAlias(entry.name, entry.id, true)
+  }
   for (const [id, override] of Object.entries(overrides)) {
     if (id.length === 0) invalid(provider, 'has a modelOverrides entry with an empty model id')
     if (defaults.size === 0) {
@@ -953,5 +1000,5 @@ export function resolveRouteModels(
     invalid(provider, `sets compat "${field}", but no model on the route speaks a protocol that takes it;`
       + ` it exists on ${takers.join(', ')}`)
   }
-  return { models: serviceableModels, configuredMaxTokens, modelErrors }
+  return { models: serviceableModels, configuredMaxTokens, modelErrors, modelAliases }
 }

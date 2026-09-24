@@ -59,6 +59,10 @@ const validPayloads: Readonly<Record<string, SessionFormatJsonValue>> = {
   },
   'hook/invoked': { turn: 1, point: 'PreToolUse', dialect: 'claude-code', handlerId: 'hook-1' },
   'hook/result': { turn: 1, point: 'PreToolUse', handlerId: 'hook-1', decision: 'pass', durationMs: 1 },
+  'image/reply': {
+    turn: 1, attachmentId: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    mediaType: 'image/png', bytes: 10, width: 4, height: 4,
+  },
   'llm/retry': {
     retryId: 'retry-1', turn: 1, step: 0, provider: 'mock', mode: 'normal', policyKey: 'default',
     retry: 1, maxRetries: 2, delayMs: 10, failure: { message: 'retry', code: 'SERVER' },
@@ -132,6 +136,10 @@ const validPayloads: Readonly<Record<string, SessionFormatJsonValue>> = {
   'turn/end': { turn: 1, reason: { kind: 'completed' } },
   'turn/start': { turn: 1 },
   'user/message': userMessage,
+  'voice/reply': {
+    turn: 1, voiceId: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    mediaType: 'audio/mpeg', bytes: 10, durationMs: 1500, transcript: 'hi',
+  },
   'web/deepseek-search-llm-request': {
     endpoint: 'https://example.test/messages', apiVersion: '2023-06-01',
     body: {
@@ -214,7 +222,7 @@ function replaceAtPath(value: SessionFormatJsonValue, path: string, replacement:
 describe('released event and payload inventory', () => {
   it('has an executable valid fixture for every frozen released-v0 event type', () => {
     expect(Object.keys(validPayloads).sort()).toEqual([...RELEASED_V0_EVENT_TYPES].sort())
-    expect(RELEASED_V0_EVENT_TYPES).toHaveLength(51)
+    expect(RELEASED_V0_EVENT_TYPES).toHaveLength(53)
     expect(RELEASED_V0_EVENT_TYPES.filter(type => !KNOWN_SESSION_EVENT_TYPES.has(type))).toEqual([
       'assistant/chunk',
       'tool/code-dispatch',

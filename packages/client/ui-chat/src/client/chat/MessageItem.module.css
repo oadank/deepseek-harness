@@ -20,6 +20,102 @@
      conversation column, where the axis variable is absent. */
   max-width: min(calc(var(--dsh-chat-content-width, 748px) * 0.702), 82%);
 }
+
+/* [本地改造 2026-08-16] 语音消息卡片：播放按钮 + 时长，右对齐气泡风格。 */
+.voiceCard {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  height: 44px;
+  padding: 0 16px 0 10px;
+  background: var(--dsw-specific-bubble);
+  border-radius: 22px;
+  /* [本地改造 2026-08-16] 无 transcript 的语音按时长定宽，宽度须含 padding。 */
+  box-sizing: border-box;
+}
+
+.voicePlay {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  corner-shape: round;
+  background: var(--dsw-specific-selector);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.voicePlay:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+.voicePlay:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.voiceDuration {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* [本地改造 2026-08-16] 语音识别文本（host ASR 写入 attachment.transcript）。 */
+.voiceTranscript {
+  display: block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* [本地改造 2026-08-21] ASR 失败（无 transcript）时的弱提示。 */
+.voiceTranscriptFailed {
+  display: block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 16px;
+  opacity: 0.85;
+}
+
+/* [本地改造 2026-08-21] 语音条内置复制按钮（对齐系统 .action：28px 圆形透明）。 */
+.voiceCopy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  border: none;
+  border-radius: 28px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.voiceCopy:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* [本地改造 2026-08-16] 助手语音回复独立横条：左对齐，与用户语音消息同级。 */
+.voiceReplyRow {
+  display: flex;
+  justify-content: flex-start;
+  padding: 2px 0;
+}
 .bubble {
   /* Figma's 525px cap held as a share of the width axis (525/748 ≈ 0.702) so
      the bubble widens with a user-dragged or adaptive column; percentage

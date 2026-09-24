@@ -71,9 +71,8 @@ export function apply(ctx: Context): void {
   const program = webCommand()
   program.action(() => {
     const options = program.opts<WebOptions>()
-    if (options.host === '0.0.0.0') {
-      program.error('error: --host 0.0.0.0 is intentionally not supported yet for safety: it would expose remote code execution to the network; use 127.0.0.1 instead')
-    }
+    // [2026-09-21 本地定制] 允许 --host 0.0.0.0：本机脚本用 127.0.0.1、老大用 tailscale IP，都要通。
+    // 内网自用 + trustedHosts 门禁；不暴露公网。
     if (options.port !== undefined && !/^\d+$/.test(options.port)) {
       program.error(`error: --port must be a number, got ${JSON.stringify(options.port)}`)
     }

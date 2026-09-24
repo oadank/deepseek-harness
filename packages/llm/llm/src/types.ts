@@ -50,6 +50,14 @@ export interface LlmFailure {
   /** Opaque provider-issued request identifier for diagnostics. */
   readonly requestId?: ProviderRequestId
   /**
+   * Flat, JSON-safe cause-chain snapshot from {@link LlmError} construction
+   * (or the transport capture layer for SDKs that flatten the chain away),
+   * e.g. `{ code: 'ECONNRESET', errno: -104, 'cause1.code': 'UND_ERR_SOCKET' }`.
+   * Diagnostic-only: carries transport fields (code/errno/syscall/hostname/
+   * address/port) and never API keys, request bodies, or user prompts.
+   */
+  readonly details?: Readonly<Record<string, unknown>>
+  /**
    * With code `IMAGE_OFFLOAD_REQUIRED`: how many more of the oldest retained
    * image occurrences the route needs offloaded before the same request fits
    * its exact byte accounting. `dsh-compaction-image-offload` records the
@@ -86,6 +94,29 @@ export interface ImageBlock {
    * available read-only path instead of image bytes.
    */
   offloaded?: true
+}
+
+/**
+ * A durable voice recording reference, valid in user content today. The host
+ * persists the browser-uploaded bytes content-addressed beside image objects
+ * and transcribes them through the local ASR service; the transcript rides the
+ * reference so serialization can degrade cleanly when recognition fails.
+ */
+export interface VoiceBlock {
+  type: 'voice'
+  /** Immutable bytes and recognition metadata for one recording. */
+  attachment: {
+    /** Opaque storage identifier; never a filesystem path or bearer URL. */
+    voiceId: string
+    /** Recording container format from the browser wire (audio/mpeg added for TTS replies). */
+    mediaType: 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/wav' | 'audio/mpeg'
+    /** Exact encoded byte length. */
+    bytes: number
+    /** Recorder-reported length in milliseconds. */
+    durationMs?: number
+    /** Local ASR transcript; absent when recognition failed or is unavailable. */
+    transcript?: string
+  }
 }
 
 /**
@@ -139,6 +170,7 @@ export interface ContentBlockMap {
   'text': TextBlock
   'reasoning': ReasoningBlock
   'image': ImageBlock
+  'voice': VoiceBlock
   'file': FileBlock
   'tool-call': ToolCallBlock
   'tool-addition': ToolAdditionBlock

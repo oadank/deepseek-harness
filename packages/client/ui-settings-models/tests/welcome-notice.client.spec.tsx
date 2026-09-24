@@ -32,6 +32,9 @@ const WELCOME_NOTICE_COPY = {
 afterEach(() => {
   cleanup()
   document.getElementById('root')?.remove()
+  // [2026-09-11] ack 的 localStorage 兜底（f03d8fad76）跨测试共享，已确认状态会挡住
+  // 后续用例的 dialog 渲染，用后必须清掉。
+  localStorage.clear()
 })
 
 /** The settings namespace answers over the Remote carrier, which has no envelope. */

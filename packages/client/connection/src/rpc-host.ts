@@ -122,6 +122,11 @@ export class HostConnectionService extends Service implements HostConnectionHand
     return this.browserAuth.authenticatedUrl(baseUrl)
   }
 
+  /** [本地改造 2026-09-10] 相对形态的带 token 首页 URL。 */
+  indexRelativeUrl(): string {
+    return this.browserAuth.indexRelativeUrl()
+  }
+
   /**
    * Compose one shared-channel Fetch handler from exact routes and its interceptor.
    * @param channel - shared channel mounted by Connection.

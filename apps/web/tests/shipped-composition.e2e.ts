@@ -533,6 +533,7 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
   await index.body?.cancel()
   expect(ctx.llm.providerRetryPolicy('deepseek-official')).toMatchInlineSnapshot(`
     {
+      "codes": {},
       "initialDelayMs": 500,
       "jitterRatio": 0.1,
       "maxDelayMs": 10000,
@@ -566,6 +567,7 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
   })
   expect(ctx.llm.providerRetryPolicy('openai')).toMatchInlineSnapshot(`
     {
+      "codes": {},
       "initialDelayMs": 500,
       "jitterRatio": 0.1,
       "maxDelayMs": 10000,
@@ -641,8 +643,8 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
     expect(scaffold.ctx.commands.list(commandHandle.agent)).toContainEqual({
       definitionId: '@deepseek-ai/dsh-command-feedback',
       name: 'feedback',
-      description: 'Record feedback about this session',
-      input: { hint: '<text>' },
+      description: '记录对本会话的反馈',
+      input: { hint: '<内容>' },
     })
   } finally {
     await commandHandle.dispose()
@@ -751,7 +753,7 @@ it('routes one browser-authored Auto request through the same model before a rea
     'commands/execute',
     { agentId: sessionId, line: '/permission auto', submittedAttachments: [] },
   )
-  expect(switched.result).toEqual({ kind: 'success', text: 'preset auto' })
+  expect(switched.result).toEqual({ kind: 'success', text: '已切换预设：auto' })
 
   const agent = ctx.agents.get(sessionId)
   if (agent === undefined) throw new Error('shipped Auto session was not published')

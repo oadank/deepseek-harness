@@ -155,8 +155,12 @@ export class ClientTimerService extends Service {
   }
 
   /** Build a delayed wrapper whose pending callback belongs to the calling Fiber. */
-  private schedule(label: string, trigger: (args: any[], disposed: boolean) => number | undefined, disposed = false): any {
-    let timer: number | undefined
+  private schedule(
+    label: string,
+    trigger: (args: any[], disposed: boolean) => ReturnType<typeof setTimeout> | undefined,
+    disposed = false,
+  ): any {
+    let timer: ReturnType<typeof setTimeout> | undefined
     const dispose = this.ctx.effect(() => () => {
       disposed = true
       globalThis.clearTimeout(timer)
@@ -182,12 +186,12 @@ export class ClientTimerService extends Service {
       lastCall = Date.now()
       callback(...args)
     }
-    return this.schedule('ctx.throttle()', (args, disposed) => {
+    return this.schedule('ctx.throttle()', (args, disposed): ReturnType<typeof setTimeout> | undefined => {
       const remaining = delay - Date.now() + lastCall
       if (remaining <= 0) {
         execute(...args as Parameters<F>)
       } else if (!disposed) {
-        return globalThis.setTimeout(execute, remaining, ...args)
+        return globalThis.setTimeout(execute, remaining, ...args) as unknown as ReturnType<typeof setTimeout>
       }
     }, noTrailing)
   }
@@ -199,9 +203,9 @@ export class ClientTimerService extends Service {
    * @returns Debounced function with an early disposer.
    */
   debounce<F extends (...args: any[]) => void>(callback: F, delay: number): WithDispose<F> {
-    return this.schedule('ctx.debounce()', (args, disposed) => {
+    return this.schedule('ctx.debounce()', (args, disposed): ReturnType<typeof setTimeout> | undefined => {
       if (disposed) return
-      return globalThis.setTimeout(callback, delay, ...args)
+      return globalThis.setTimeout(callback, delay, ...args) as unknown as ReturnType<typeof setTimeout>
     })
   }
 }

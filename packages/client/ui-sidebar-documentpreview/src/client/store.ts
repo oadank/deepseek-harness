@@ -100,6 +100,8 @@ type TextActions = {
   resourceChanged: (draft: TextState, tabId: TabId) => void
   selected: (draft: TextState, tabId: TabId, rendererId: string | undefined) => void
   loading: (draft: TextState, tabId: TabId, mode?: DocumentLoadMode, observedVersion?: string, contentRendererId?: string) => void
+  /** [本地改造] 流模式开始：宿主不读字节，正文自己走传输；只记模式与观察到的版本。 */
+  streamed: (draft: TextState, tabId: TabId, mode?: DocumentLoadMode, observedVersion?: string) => void
   rendered: (draft: TextState, tabId: TabId, revision: number, version: string) => void
   rendererFailed: (draft: TextState, tabId: TabId, revision: number) => void
   complete: (draft: TextState, tabId: TabId, file: DocumentFileBytes) => void
@@ -149,6 +151,23 @@ export function createTextStore(): EngineStoreHandle<TextState, TextActions> {
         state.loading = true
         state.failure = undefined
         if (mode !== undefined) state.mode = mode
+      },
+      /**
+       * Stream mode start: no host byte load; body owns the transport.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param mode - loading mode, expected `stream`.
+       * @param observedVersion - metadata version at start.
+       */
+      streamed: (d, tabId: TabId, mode?: DocumentLoadMode, observedVersion?: string) => {
+        const state = bucket(d, tabId)
+        if (state.version === undefined && !state.loading) state.observedVersion = observedVersion
+        delete state.contentRendererId
+        state.loading = true
+        state.failure = undefined
+        if (mode !== undefined) state.mode = mode
+        // Stream body reports readiness itself; owner does not wait on host pages.
+        state.loading = false
       },
       /**
        * @param d - draft. @param tabId - owning tab.

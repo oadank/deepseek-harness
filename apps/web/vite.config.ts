@@ -24,7 +24,7 @@ function clientDocumentTitle(): Plugin {
   return {
     name: 'dsh-client-document-title',
     transformIndexHtml(html) {
-      return html.replace('<title>DSH Local Build</title>', `<title>${title}</title>`)
+      return html.replace('<title>DeepSeek Harness</title>', `<title>${title}</title>`)
     },
   }
 }

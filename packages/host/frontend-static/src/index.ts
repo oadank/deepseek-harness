@@ -72,6 +72,7 @@ export async function serveStatic(
   pathname: string, res: ServerResponse, distRoot: string, distIndex: string,
   authorizeIndex: () => boolean,
   renderIndex: () => Promise<string>,
+  authenticatedIndexUrl: () => string = () => '/',
 ): Promise<void> {
   const target = resolve(normalize(join(distRoot, pathname)))
   // Traversal rejection: the target must be distRoot itself (`/`) or stay under
@@ -79,6 +80,15 @@ export async function serveStatic(
   // suffix would reject every legitimate subpath as traversal.
   if (target !== distRoot && !target.startsWith(distRoot + sep)) {
     res.writeHead(403)
+    res.end()
+    return
+  }
+  // [本地改造 2026-09-10] 路径式登录：GET/HEAD /t/<token> → authorizeIndex 铸 cookie
+  // （token 对 → 303 '/'；不对 → 401），cookie 有效时回 303 '/'。iOS 主屏 PWA 丢
+  // query，token 必须放路径段。
+  if (pathname.startsWith('/t/')) {
+    if (!authorizeIndex()) return
+    res.writeHead(303, { 'cache-control': 'no-store', location: '/' })
     res.end()
     return
   }
@@ -92,6 +102,15 @@ export async function serveStatic(
     } else {
       body = await readFile(target)
       type = MIME[extname(target)] ?? 'application/octet-stream'
+      // [本地改造 2026-09-10] manifest start_url 注入 token：iOS 主屏 PWA 以
+      // start_url 打开，裸 '/' 无凭据必 401。
+      if (pathname === '/manifest.webmanifest' && type === 'application/manifest+json') {
+        try {
+          const manifest = JSON.parse(body.toString('utf8')) as Record<string, unknown>
+          if (manifest['start_url'] === '/') manifest['start_url'] = authenticatedIndexUrl()
+          body = JSON.stringify(manifest)
+        } catch { /* 非 JSON 原样返回 */ }
+      }
     }
   } catch (error) {
     // Only absent or non-file targets are 404; other filesystem failures reach
@@ -135,6 +154,7 @@ export function apply(ctx: Context, config: Config): void {
       distIndex,
       () => ctx.connection.authorizeIndex(req, res),
       renderIndex,
+      () => ctx.connection.indexRelativeUrl(),
     )
   }), 'frontend-static: fallback seat')
 }

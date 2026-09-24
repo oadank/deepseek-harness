@@ -206,6 +206,16 @@ export function apply(ctx: Context): void {
             (attachment: ImageAttachmentRef) => ctx.uiConversation.imageUrl(sessionId, attachment),
             { peek: (attachment: ImageAttachmentRef) => ctx.uiConversation.peekImageUrl(sessionId, attachment) },
           ),
+          // [本地改造 2026-08-16 / 0.1.5 已迁移] voice objects share the attachment
+          // objects pool; the Host serves them on GET /api/voice.
+          loadVoice: async (ref) => {
+            const url = new URL('/api/voice', globalThis.location?.origin ?? 'http://127.0.0.1')
+            url.searchParams.set('voiceId', ref.voiceId)
+            const response = await fetch(url, { credentials: 'same-origin' })
+            if (!response.ok) throw new Error(`voice load failed: ${String(response.status)}`)
+            const blob = await response.blob()
+            return URL.createObjectURL(blob)
+          },
           chatScroll: {
             save: (position) => {
               if (position === null) chatScrollPositions.delete(sessionId)

@@ -110,12 +110,33 @@ export type PromptContentPart =
 export type AttachmentAdmissionPart =
   | PromptContentPart
   | { readonly type: 'file'; readonly attachment: FileAttachmentRef }
+  | { readonly type: 'voice'; readonly attachment: VoiceAdmissionRef }
+
+/**
+ * [本地改造 2026-09-11 / 抄自 pre-merge apiproxy voice 形态] One durable voice
+ * reference already stored content-addressed below the shared objects pool by
+ * the voice save endpoint before the prompt is submitted. Admission passes it
+ * through unchanged; this package performs no voice storage of its own.
+ */
+export interface VoiceAdmissionRef {
+  /** `sha256:<hex>` content address inside the shared objects pool. */
+  readonly voiceId: string
+  /** Recording container from the browser wire. */
+  readonly mediaType: 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/wav' | 'audio/mpeg'
+  /** Exact encoded byte length. */
+  readonly bytes: number
+  /** Recorder-reported length in milliseconds. */
+  readonly durationMs?: number
+  /** Local ASR transcript; absent when recognition failed or is unavailable. */
+  readonly transcript?: string
+}
 
 /** Host-admitted prompt content with every attachment represented by its durable reference. */
 export type AdmittedPromptContentPart =
   | { readonly type: 'text'; readonly text: string }
   | { readonly type: 'image'; readonly attachment: ImageAttachmentRef }
   | { readonly type: 'file'; readonly attachment: FileAttachmentRef }
+  | { readonly type: 'voice'; readonly attachment: VoiceAdmissionRef }
 
 /** Request to validate and durably commit one image. */
 export interface SaveImageAttachment {

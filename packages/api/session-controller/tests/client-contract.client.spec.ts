@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest'
-import type { PromptContentPart as AttachmentPromptContentPart } from '@deepseek-ai/dsh-attachment/types'
+import type { AttachmentAdmissionPart } from '@deepseek-ai/dsh-attachment/types'
 import { SessionSeq, type SessionSeqCursor } from '@deepseek-ai/dsh-session/types'
 import {
   MutableSessionEventSource, type SessionAssistantSettlementEntry,
@@ -73,9 +73,11 @@ describe('Client Session contracts', () => {
     expectTypeOf<SessionPageRequest['throughSeq']>().toEqualTypeOf<number>()
   })
 
-  it('keeps its text and image prompt parts identical to attachment intake', () => {
+  it('keeps its text, image, and voice prompt parts identical to attachment intake', () => {
+    // [本地改造 2026-09-11] session 契约加 voice 引用块后，与 admission intake 的
+    // 对齐口径排除 file（voice 形状 = VoiceAdmissionRef，两侧结构一致）。
     expectTypeOf<Exclude<SessionPromptContentPart, { type: 'file' }>>()
-      .toEqualTypeOf<AttachmentPromptContentPart>()
+      .toEqualTypeOf<Exclude<AttachmentAdmissionPart, { type: 'file' }>>()
   })
 
   it('publishes exact replace, prepend, and append event-window changes', () => {

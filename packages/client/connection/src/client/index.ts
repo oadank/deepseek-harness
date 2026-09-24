@@ -182,18 +182,35 @@ interface BrowserNetworkTarget {
   removeEventListener(type: 'online' | 'offline', listener: () => void): void
 }
 
+interface BrowserVisibilityTarget {
+  readonly visibilityState?: string
+  addEventListener(type: 'visibilitychange', listener: () => void): void
+  removeEventListener(type: 'visibilitychange', listener: () => void): void
+}
+
 function watchBrowserNetwork(controller: ConnectionController): () => void {
   const browser = (globalThis as { readonly window?: BrowserNetworkTarget }).window
   const initiallyAvailable = browser?.navigator?.onLine
   if (browser === undefined || initiallyAvailable === undefined) return () => {}
   const online = (): void => { controller.setNetworkAvailable(true) }
   const offline = (): void => { controller.setNetworkAvailable(false) }
+  // A hidden page (mobile backgrounding, a locked screen) can lose the carrier without any
+  // online/offline event, and `onLine` keeps reporting true. The generation then still looks
+  // healthy while its socket is half-open, so the closing frames of a running turn never
+  // arrive and the chat stays in the running state until the reader reloads by hand.
+  // Replacing the generation on return to visible costs one round trip and clears that state.
+  const doc = (globalThis as { readonly document?: BrowserVisibilityTarget }).document
+  const visible = (): void => {
+    if (doc?.visibilityState === 'visible') controller.reconnect()
+  }
   controller.setNetworkAvailable(initiallyAvailable)
   browser.addEventListener('online', online)
   browser.addEventListener('offline', offline)
+  doc?.addEventListener('visibilitychange', visible)
   return () => {
     browser.removeEventListener('online', online)
     browser.removeEventListener('offline', offline)
+    doc?.removeEventListener('visibilitychange', visible)
   }
 }
 

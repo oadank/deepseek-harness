@@ -15,6 +15,41 @@ export interface ChatConversationViewNode extends ConversationViewNode {
 /** Merge-extensible payload registry keyed by final Chat renderer kind. */
 export interface ChatNodeDataMap {}
 
+/**
+ * [本地改造 2026-08-16 / 0.1.5 已迁移] Durable voice object reference.
+ * Mirrors the session `voice/reply` / VoiceBlock attachment shape.
+ */
+export interface VoiceAttachmentRef {
+  readonly voiceId: string
+  readonly mediaType: string
+  readonly bytes: number
+  readonly durationMs?: number | undefined
+  readonly transcript?: string | undefined
+}
+
+/** One assistant voice-reply row payload. */
+export interface VoiceReplyChatData {
+  readonly turn: number
+  readonly seq: number
+  readonly time: number
+  readonly voice: VoiceAttachmentRef
+}
+
+/** One assistant image-reply row payload. */
+export interface ImageReplyChatData {
+  readonly turn: number
+  readonly seq: number
+  readonly time: number
+  readonly image: {
+    readonly attachmentId: string
+    readonly mediaType: string
+    readonly bytes: number
+    readonly width: number
+    readonly height: number
+    readonly name?: string | undefined
+  }
+}
+
 /** Renderer kinds contributed by the currently installed Chat business modules. */
 export type ChatNodeKind = Extract<keyof ChatNodeDataMap, string>
 

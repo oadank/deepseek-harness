@@ -39,6 +39,10 @@ function validateFailure(value: unknown, fail: InvariantFailure): asserts value 
     && (typeof failure.requestId !== 'string' || failure.requestId.length === 0)) {
     fail('llm/retry failure.requestId must be a non-empty string when present')
   }
+  if (failure.details !== undefined
+    && (typeof failure.details !== 'object' || failure.details === null || Array.isArray(failure.details))) {
+    fail('llm/retry failure.details must be a plain object when present')
+  }
 }
 
 /** Validate one retry record against the currently open request step. */

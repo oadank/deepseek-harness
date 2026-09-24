@@ -425,6 +425,69 @@ export interface SessionEventMap {
    * so tolerating concurrent writers needs a signal beyond the log.
    */
   'session/end-seed': { inherited?: true }
+  /**
+   * [本地改造 2026-08-16] 助手侧语音回复：turn 完成后 host 把最后一条助手文本
+   * 合成 TTS 并落盘，作为一条独立持久语音消息（与用户语音消息同级）。前端
+   * 渲染为单独语音横条（复用 VoiceCard）。log-only：不进入模型历史重建。
+   */
+  'voice/reply': {
+    /** The turn whose closing assistant text this reply speaks. */
+    turn: number
+    /** Opaque storage identifier of the synthesized audio object. */
+    voiceId: string
+    /** Audio container format of the stored object. */
+    mediaType: string
+    /** Exact encoded byte length. */
+    bytes: number
+    /** Recorder-style duration in milliseconds. */
+    durationMs?: number
+    /** [本地改造 2026-08-21] 合成的正文（转写文本），供语音条显示与复制。 */
+    transcript?: string
+  }
+  /**
+   * [本地改造 2026-08-23] 助手侧图片回复：agent 主动发送的图片，作为一条独立
+   * 持久图片消息（与用户附件图同级）。前端渲染为独立图片横条（复用
+   * MessageImage，可点开放大）。log-only：不进入模型历史重建。
+   */
+  'image/reply': {
+    /** The turn whose assistant activity this image belongs to. */
+    turn: number
+    /** Opaque storage identifier of the image object. */
+    attachmentId: string
+    /** Image container format of the stored object. */
+    mediaType: string
+    /** Exact encoded byte length. */
+    bytes: number
+    /** Intrinsic encoded width in pixels (mirrors ImageAttachmentRef). */
+    width: number
+    /** Intrinsic encoded height in pixels (mirrors ImageAttachmentRef). */
+    height: number
+    /** Optional display caption. */
+    alt?: string
+  }
+  /**
+   * [本地改造 2026-09-20] 助手侧视频回复：agent 主动发送的视频，作为一条独立
+   * 持久视频消息（与 image/reply 同级）。前端渲染为独立视频横条（缩略预览，
+   * 点击放大播放，关闭收回）。log-only：不进入模型历史重建。
+   */
+  'video/reply': {
+    /** The turn whose assistant activity this video belongs to. */
+    turn: number
+    /** Opaque storage identifier of the video object. */
+    attachmentId: string
+    /** Video container format of the stored object. */
+    mediaType: string
+    /** Exact encoded byte length. */
+    bytes: number
+    /** Intrinsic encoded width in pixels (absent when unknown). */
+    width?: number
+    /** Intrinsic encoded height in pixels (absent when unknown). */
+    height?: number
+    /** Playback duration in milliseconds (absent when unknown). */
+    durationMs?: number
+    /** Optional display caption. */
+    alt?: string
+  }
 }
 
 /** The appendable event-type keys of {@link SessionEventMap}, plugin-merged extensions included. */

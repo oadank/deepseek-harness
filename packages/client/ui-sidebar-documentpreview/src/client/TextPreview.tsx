@@ -100,7 +100,9 @@ export function TextPreview({
   const pages = current?.pages
   const loaded = useMemo(() => loadedPages(pages ?? {}), [pages])
   const loadedThrough = lastLineLoaded(loaded)
-  const hasContent = mode === 'renderer' ? current?.version !== undefined : loaded.length > 0 || current?.complete !== undefined
+  const hasContent = mode === 'renderer' || mode === 'stream'
+    ? current?.version !== undefined || mode === 'stream'
+    : loaded.length > 0 || current?.complete !== undefined
   storedScrollTopRef.current = state?.scrollTop ?? 0
   const bindBody = useCallback((body: HTMLDivElement | null): void => {
     const previous = bodyRef.current
@@ -120,8 +122,9 @@ export function TextPreview({
     if (started || !canRead || mode === undefined || selected === undefined) return
     if (mode === 'text-pages') loadPage(tab.id, file, 1, signal, meta.value?.version)
     else if (mode === 'bytes-complete') loadAll(tab.id, file, signal, meta.value?.version)
+    else if (mode === 'stream') actions.streamed(tab.id, mode, meta.value?.version)
     else prepareRenderer(tab.id, signal, selected.id, meta.value?.version)
-  }, [started, tab.id, file, signal, loadPage, loadAll, prepareRenderer, canRead, mode, selected, meta.value?.version])
+  }, [started, tab.id, file, signal, loadPage, loadAll, prepareRenderer, actions, canRead, mode, selected, meta.value?.version])
 
   // Come back where the reader was once there is content to scroll: on a remount,
   // after a reload rebuilt the content, or after the selected renderer changed.
@@ -176,6 +179,8 @@ export function TextPreview({
     if (state?.autoRefresh && changed && current !== undefined && !current.loading && meta.status === 'live') reload()
   }, [state?.autoRefresh, changed, current?.loading, meta.status, reload])
   const content = useMemo((): DocumentContent | undefined => {
+    // [本地改造] 流模式：正文自己读，owner 只交出「这是流」这一个事实。
+    if (mode === 'stream') return current === undefined ? undefined : { kind: 'stream' }
     if (mode === 'renderer') {
       if (current === undefined) return undefined
       const revision = current.loadRevision
@@ -190,7 +195,7 @@ export function TextPreview({
     }
     if (current === undefined || loaded.length === 0) return undefined
     return { kind: 'text', pages: loaded, text: loaded.filter(page => page.lines > 0).map(page => page.text).join('\n'), eof: current.eof }
-  }, [mode, loaded, current?.complete, current?.eof, current?.loadRevision, rendererReload, actions, tab.id])
+  }, [mode, loaded, current, current?.complete, current?.eof, current?.loadRevision, rendererReload, actions, tab.id])
 
   // A known binary suffix with no matching renderer never reads: no plain-text
   // fallback, no viewer control, only the path, the unsupported line, and the

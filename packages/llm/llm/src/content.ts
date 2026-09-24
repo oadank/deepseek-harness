@@ -73,9 +73,27 @@ function normalizedAccessText(ref: ImageAttachmentRef, access: ImageAttachmentAc
  * @param ref - durable normalized attachment omitted from the request.
  * @returns deterministic text-only placeholder.
  */
+/** [本地改造 2026-09-10] 解析 DSH 附件主目录（nssm 场景 env 可能缺项，逐级回落）。 */
+function dshHomeDir(): string {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
+  const dsh = env?.DSH_HOME
+  if (dsh !== undefined && dsh.length > 0) return dsh.replace(/[\/]+$/, '')
+  const up = env?.USERPROFILE ?? env?.HOME
+  return up !== undefined && up.length > 0 ? up.replace(/[\/]+$/, '') + '/.dsh' : ''
+}
+
 export function textOnlyImageText(ref: ImageAttachmentRef): string {
-  const digest = String(ref.attachmentId).slice('sha256:'.length, 'sha256:'.length + 8)
-  return `[image omitted because this model accepts text only; attachment sha256:${digest}]`
+  const full = String(ref.attachmentId)
+  const hex = full.startsWith('sha256:') ? full.slice('sha256:'.length) : full
+  const digest = hex.slice(0, 8)
+  const home = dshHomeDir()
+  const objectPath = home !== '' && hex.length === 64
+    ? `${home}/attachments/v1/objects/${hex.slice(0, 2)}/${hex}`
+    : undefined
+  const head = `[image omitted because this model accepts text only; attachment sha256:${digest}`
+  return objectPath === undefined
+    ? `${head}]`
+    : `${head}; 本地文件路径 ${objectPath}（无扩展名内容寻址对象，直接以 image_path 参数调用 look_image 工具识图：默认 describe=看图描述；要求像素级反推用 task="reverse"；提取图中文字用 task="text"。路径可能无扩展名，直接 readFile 即可。）]`
 }
 
 /**
@@ -172,6 +190,42 @@ function replaceFilesWithHandles(
     next?.push(block)
   }
   return next ?? blocks as ContentBlock[]
+}
+
+/** [本地改造 2026-08-16 · 0.1.7 重落] 语音对象的内容寻址读取路径（与 attachment 存储布局一致）。 */
+function voiceObjectPath(voiceId: string): string {
+  const hex = voiceId.startsWith('sha256:') ? voiceId.slice('sha256:'.length) : voiceId
+  if (hex.length === 0) return '(unknown)'
+  const home = process.env.DSH_HOME ?? (process.env.USERPROFILE ? `${process.env.USERPROFILE}/.dsh` : process.env.HOME ? `${process.env.HOME}/.dsh` : '')
+  return home.length === 0 ? '(unknown)' : `${home}/attachments/v1/objects/${hex.slice(0, 2)}/${hex}`
+}
+
+/** [本地改造 2026-08-16] 一条语音换成模型可读文本：有识别结果直给文本，没有则给本地路径让 agent 走本机 ASR。 */
+export function voiceHandleText(attachment: { voiceId: string; durationMs?: number | undefined; transcript?: string | undefined }): string {
+  const duration = typeof attachment.durationMs === 'number' ? `（时长 ${Math.round(attachment.durationMs / 1000)} 秒）` : ''
+  const transcript = typeof attachment.transcript === 'string' && attachment.transcript.length > 0 ? attachment.transcript : undefined
+  if (transcript !== undefined) return `[用户发送了一条语音${duration}，识别内容：${transcript}]`
+  return `[用户发送了一条语音${duration}，本地语音文件路径: ${voiceObjectPath(attachment.voiceId)}。请调用本机语音识别服务转写后再回答；路径可能无扩展名，直接读取即可。]`
+}
+
+/**
+ * Project voice content into handle text for every model route, mirroring
+ * {@link projectFilesToText}: no provider represents voice blocks natively, so
+ * request assembly must clear them before dispatch.
+ * @param messages - complete request inputs.
+ * @returns original inputs without voices, otherwise copies with handle text.
+ */
+export function projectVoicesToText(messages: readonly RequestMessage[]): readonly RequestMessage[] {
+  if (!messages.some(message => message.content.some(block => block.type === 'voice'))) return messages
+  return messages.map((message): RequestMessage => {
+    if (!message.content.some(block => block.type === 'voice')) return message
+    const content = message.content.flatMap((block): ContentBlock[] => (block.type === 'voice'
+      ? [{ type: 'text', text: voiceHandleText(block.attachment) }]
+      : block.type === 'tool-result'
+        ? [{ ...block, content: projectVoicesToText([{ ...message, role: 'user', content: block.content } as RequestMessage]).flatMap(projected => projected.content) }]
+        : [block]))
+    return { ...message, content }
+  })
 }
 
 /**

@@ -11,7 +11,8 @@ export interface DocumentTextPage {
 }
 
 /**
- * Ordinary file contents, or a request for the selected renderer to load its content.
+ * Ordinary file contents, a request for the selected renderer to load, or a
+ * stream mode where the body reads the file itself (media streaming).
  * Byte arrays are transient UI input, never persisted layout or Session data.
  */
 export type DocumentContent =
@@ -28,6 +29,8 @@ export type DocumentContent =
     /** Cancel the current load and start a new revision. */
     readonly reload: () => void
   }
+  /** [本地改造 2026-09-XX] 流模式：正文自己按资源地址读文件（音视频流式播放），owner 只记模式与版本。 */
+  | { readonly kind: 'stream' }
 
 /** Content and viewing inputs shared by document bodies and nested PDF presentation. */
 export interface DocumentBodyOwner {

@@ -120,7 +120,7 @@ function assertSource(message: SessionFormatJsonObject): void {
   }
 }
 
-const CONTENT_KINDS = new Set(['text', 'reasoning', 'image', 'file', 'tool-call', 'tool-result'])
+const CONTENT_KINDS = new Set(['text', 'reasoning', 'image', 'file', 'voice', 'tool-call', 'tool-result'])
 
 function contentArray(value: SessionFormatJsonValue | undefined, label: string): readonly SessionFormatJsonValue[] {
   if (!Array.isArray(value)) throw new SessionFormatError(label + ': content must be an array')
@@ -190,6 +190,22 @@ function assertContentBlock(value: SessionFormatJsonValue | undefined, label: st
     if (typeof attachment['attachmentId'] !== 'string' || attachment['attachmentId'].length === 0
       || typeof attachment['name'] !== 'string') throw new SessionFormatError(label + ' kind "file": file attachment requires attachmentId and name')
     sessionFormatCount(attachment['bytes'], label + ' kind "file" attachment bytes')
+    return
+  }
+  // [本地改造 0.1.5] fork 语音内容块：与 VoiceBlock attachment 同构。
+  if (block['type'] === 'voice') {
+    keys(block, ['type', 'attachment'], [], label + ' kind "voice"')
+    const attachment = record(block['attachment'], label + ' kind "voice" attachment')
+    keys(attachment, ['voiceId', 'mediaType', 'bytes'], ['durationMs', 'transcript'], label + ' kind "voice" attachment')
+    if (typeof attachment['voiceId'] !== 'string' || attachment['voiceId'].length === 0
+      || typeof attachment['mediaType'] !== 'string' || attachment['mediaType'].length === 0) {
+      throw new SessionFormatError(label + ' kind "voice": voice attachment requires voiceId and mediaType')
+    }
+    sessionFormatCount(attachment['bytes'], label + ' kind "voice" attachment bytes')
+    if (attachment['durationMs'] !== undefined) sessionFormatCount(attachment['durationMs'], label + ' kind "voice" attachment durationMs')
+    if (attachment['transcript'] !== undefined && typeof attachment['transcript'] !== 'string') {
+      throw new SessionFormatError(label + ' kind "voice" attachment transcript must be a string')
+    }
     return
   }
   // Reuse frozen field rules without recursively revisiting tool-result children or interpreting opaque JSON.

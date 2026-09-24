@@ -85,6 +85,10 @@ export type SessionProjectionValues = Partial<SessionProjectionMap>
  * Browser-submitted prompt content; the Host promotes image bytes to durable
  * references. File parts carry the opaque receipt returned by a preceding
  * `uploadFile` call on the same Session.
+ * [本地改造 2026-09-11 / 抄自 pre-merge apiproxy voice 形态] Voice parts carry a
+ * durable content-addressed reference produced by the voice save endpoint
+ * (bytes already stored in the shared objects pool); the transcript rides the
+ * reference so serialization can degrade cleanly when recognition fails.
  */
 export type PromptContentPart =
   | { readonly type: 'text'; readonly text: string }
@@ -95,6 +99,16 @@ export type PromptContentPart =
     readonly name?: string
   }
   | { readonly type: 'file'; readonly receiptId: Branded<'file-upload-receipt-id'> }
+  | {
+    readonly type: 'voice'
+    readonly attachment: {
+      readonly voiceId: string
+      readonly mediaType: 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/wav' | 'audio/mpeg'
+      readonly bytes: number
+      readonly durationMs?: number
+      readonly transcript?: string
+    }
+  }
 
 /** Complete model selection for one Session. */
 export interface ModelSelection {
