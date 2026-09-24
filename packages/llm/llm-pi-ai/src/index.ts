@@ -299,6 +299,42 @@ export function apply(ctx: Context, config: Config): void {
   }
   ensureRegistrationFacts()
 
+  /**
+   * Rewrite a dangling `agent-default-model` after a models-list edit.
+   * Model `id` is the wire name and is freely editable; stored defaults and
+   * session selections are raw id strings. When the default's id disappears,
+   * move it to the alias/name hit or the route's first serviceable model so
+   * one rename cannot brick every future turn.
+   */
+  const migrateDanglingDefault = (): void => {
+    const defaults = ctx.get('agentDefaultModel') as
+      | {
+        currentSelection(): { provider: string; model: string; reasoningEffort?: unknown }
+        saveSelection(selection: { provider: string; model: string }): Promise<void>
+      }
+      | undefined
+    if (defaults?.saveSelection === undefined) return
+    try {
+      const selected = defaults.currentSelection()
+      const profile = profiles().get(selected.provider)
+      if (profile === undefined || profile.serviceableModels.length === 0) return
+      const aliasTo = profile.modelAliases.get(selected.model)
+      const matched = aliasTo === undefined
+        ? profile.serviceableModels.find(entry =>
+          entry.id === selected.model || entry.name === selected.model)
+        : profile.serviceableModels.find(entry => entry.id === aliasTo)
+      const target = matched ?? profile.serviceableModels[0]
+      if (target === undefined || target.id === selected.model) return
+      void defaults.saveSelection({ provider: selected.provider, model: target.id }).catch(() => {})
+      ctx.logger.warn(
+        `llm-pi-ai: agent-default-model "${selected.provider}/${selected.model}" is gone;`
+        + ` migrated to "${target.id}"`,
+      )
+    } catch {
+      // Migration is best-effort; a broken default must not block settings.
+    }
+  }
+
   ctx.inject(['settings'], (settingsCtx) => {
     let registering = true
     settingsCtx.settings.installSection(ctx, NS, Config, config, {
@@ -337,6 +373,7 @@ export function apply(ctx: Context, config: Config): void {
           ctx.logger.error('llm-pi-ai: keeping the previous configurable-provider directory after a refused update')
           ctx.logger.error(error)
         }
+        migrateDanglingDefault()
       },
     })
     registering = false

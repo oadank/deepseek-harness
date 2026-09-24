@@ -127,6 +127,9 @@ export class SessionCommandController {
 
   /**
    * Validate and install one Session-local model selection.
+   * A stale id (settings renamed the model) heals to a live catalog entry on
+   * the same route — preferring a display-name hit, else the first serviceable
+   * model — so one settings edit cannot brick every later switch and turn.
    * @param request - Session identity and requested model selection.
    * @returns the normalized selection installed for the Session.
    */
@@ -134,7 +137,7 @@ export class SessionCommandController {
     const agent = await this.resolveAgent(request.sessionId)
     return this.agents.serializeImageAdmission(agent, async () => {
       try {
-        const resolved = await this.ctx.llm.resolveCallConfig({
+        const resolved = await this.resolveSelectionHealing({
           provider: request.provider,
           model: request.model,
           ...(request.reasoningEffort === undefined
@@ -166,6 +169,60 @@ export class SessionCommandController {
         )
       }
     })
+  }
+
+  /**
+   * Resolve one selection, recovering from a stale model id on a live route.
+   * @param requested - provider/model/effort the caller asked for.
+   * @returns the validated selection, healed when the id no longer exists.
+   */
+  private async resolveSelectionHealing(requested: AgentModelSelection): Promise<AgentModelSelection> {
+    try {
+      return await this.ctx.llm.resolveCallConfig(requested)
+    } catch (error) {
+      const code = (error as { code?: string } | undefined)?.code
+      if (code !== 'UNKNOWN_MODEL') throw error
+      const models = await this.ctx.llm.listModels(requested.provider)
+      const fallback = models.find(model => model.name === requested.model) ?? models[0]
+      if (fallback === undefined) throw error
+      return await this.ctx.llm.resolveCallConfig({
+        provider: requested.provider,
+        model: fallback.id,
+      })
+    }
+  }
+
+  /**
+   * Return the Session's live model selection, healing a stale id left by a
+   * settings rename so the next turn does not die with UNKNOWN_MODEL.
+   * Deployments whose llm face cannot resolve configs keep the raw selection.
+   * @param agent - live Agent whose selection is read.
+   * @returns the selection the turn will actually run.
+   */
+  private async ensureLiveSelection(agent: Agent): Promise<AgentModelSelection> {
+    const current = this.agents.selectionFor(agent).current
+    const llm = this.ctx.llm as {
+      resolveCallConfig?: (config: AgentModelSelection) => Promise<AgentModelSelection>
+    } | undefined
+    if (typeof llm?.resolveCallConfig !== 'function') return current
+    try {
+      return await llm.resolveCallConfig(current)
+    } catch (error) {
+      const code = (error as { code?: string } | undefined)?.code
+      if (code !== 'UNKNOWN_MODEL') return current
+      try {
+        const healed = await this.resolveSelectionHealing(current)
+        this.agents.selectForNextRequest(agent, healed)
+        try {
+          await this.ctx.agentDefaultModel.saveSelection(healed)
+        } catch {
+          // Default stays stale; the Session still runs on the healed route.
+        }
+        return healed
+      } catch {
+        return current
+      }
+    }
   }
 
   /**
@@ -316,7 +373,7 @@ export class SessionCommandController {
     }
     const agent = await this.resolveAgent(request.sessionId)
     if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
-    const selection = this.agents.selectionFor(agent).current
+    const selection = await this.ensureLiveSelection(agent)
     if (!routeServed(this.ctx, selection.provider)) {
       throw new RemoteError(
         'session/model-unavailable',

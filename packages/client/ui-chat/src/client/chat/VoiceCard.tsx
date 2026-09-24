@@ -48,25 +48,44 @@ export const VoiceCard = memo(function VoiceCard({ attachment, load, actions, as
   const [failed, setFailed] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [copied, setCopied] = useState(false)
+  // [本地改造 2026-09-22] 重取地址计数器：播放失败/音频流被切断后按钮要能自愈（见 toggle）。
+  const [reloadKey, setReloadKey] = useState(0)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  // [本地改造 2026-09-22 老大实测·新语音自动播放播两三秒就断] 依赖必须用稳定的 voiceId，
+  // 不能用 attachment 对象本身：assistant 消息还在流式渲染时 Chat Node 会反复重建，每次都给出
+  // 一个新的 attachment 引用 → 这个 effect 跟着重跑 → 下面的 setUrl(null) 把 audio.src 清掉 → 正在
+  // 自动播放的新语音立刻断掉（旧语音消息已静止，所以手点能完整播完）。
+  // voiceId 是内容寻址的 sha256，内容变了 id 就变，用 id 当依赖不会漏刷新。
+  const attachmentRef = useRef(attachment)
+  attachmentRef.current = attachment
+  const voiceId = attachment.voiceId
   useEffect(() => {
     let cancelled = false
     setFailed(false)
-    setUrl(null)
     if (load === undefined) {
       setFailed(true)
       return () => { cancelled = true }
     }
-    load(attachment).then((next) => {
-      if (!cancelled) setUrl(next)
+    load(attachmentRef.current).then((next) => {
+      // 不清空旧 url：地址没变就保持原引用，避免正在播放的 audio 被换掉。
+      if (!cancelled) setUrl(prev => (prev === next ? prev : next))
     }, () => {
       if (!cancelled) setFailed(true)
     })
     return () => { cancelled = true }
-  }, [attachment, load])
+  }, [voiceId, load, reloadKey])
   const toggle = (): void => {
     const audio = audioRef.current
-    if (audio === null) return
+    // [本地改造 2026-09-22 老大实测"播放到一半停住、之后点不动"] 原来 play() 一失败就 setFailed(true)，
+    // 而按钮写的是 disabled={failed} —— 音频流被切断或被录音互斥掐停过一次，这条语音就永远点不动了。
+    // 现在：失败态依然可点，点一下重新取地址再来一次，不再把自己锁死。
+    if (audio === null || failed || audio.error !== null) {
+      if (activeVoice?.id === attachment.voiceId) activeVoice = null
+      setFailed(false)
+      setUrl(null)
+      setReloadKey(k => k + 1)
+      return
+    }
     if (playing) {
       audio.pause()
       if (activeVoice?.id === attachment.voiceId) activeVoice = null
@@ -88,7 +107,6 @@ export const VoiceCard = memo(function VoiceCard({ attachment, load, actions, as
         type="button"
         className={css.voicePlay}
         aria-label={playing ? t('voice.pause') : t('voice.play')}
-        disabled={failed}
         onClick={toggle}
       >
         {playing

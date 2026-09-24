@@ -221,6 +221,11 @@ export interface ResolvedPiAiProviderProfile
    * own, so a catalog capability must not appear here.
    */
   configuredMaxTokens: ReadonlyMap<string, number>
+  /**
+   * Alias/name → canonical model id for this route, so a renamed wire id
+   * keeps resolving stored `agent-default-model` and session selections.
+   */
+  modelAliases: ReadonlyMap<string, string>
 }
 
 /** Plugin configuration: the provider routes this instance owns. */
@@ -304,6 +309,7 @@ const reasoningEfforts = z.dict(
 /** The fields a `models` entry and a `modelOverrides` value share; only the id's home differs. */
 const modelFields = {
   name: z.string(),
+  aliases: z.array(z.string()),
   contextWindow: z.number().step(1).min(1),
   maxTokens: z.number().step(1).min(1),
   // No explicit default, unlike the route's `defaultInput`: schemastery
@@ -504,6 +510,7 @@ export function resolveProfiles(
       ...rest.thinkingBudgets === undefined ? {} : { thinkingBudgets: { ...rest.thinkingBudgets } },
       configuredMaxTokens: catalog?.configuredMaxTokens ?? new Map(),
       modelErrors: catalog?.modelErrors ?? new Map(),
+      modelAliases: catalog?.modelAliases ?? new Map(),
       serviceableModels: catalog?.models ?? [],
       ...piProvider === undefined ? {} : { piProvider },
       ...catalogError === undefined ? {} : { catalogError },

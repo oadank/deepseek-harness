@@ -812,12 +812,16 @@ export function ChatView({
               wait, tool execution, streaming) so it never flickers per step. */}
           {running && <TurnStatus startTime={runningTurnStart} t={t} />}
           {pendingSteering.map(item => (
-            <PendingSteeringBubble
-              key={item.id}
-              content={item.content}
-              renderMessageImages={renderMessageImages}
-              t={t}
-            />
+            /* [本地改造 2026-09-24] 待处理气泡此前没有任何可寻址身份（只有 React key），
+               扩展 UI 无法把这一行对应回服务端队列里的那条，撤回入口就挂不上去。
+               display:contents 让这层包装不参与布局，视觉与原来逐像素一致。 */
+            <div key={item.id} data-pending-id={String(item.id)} style={{ display: 'contents' }}>
+              <PendingSteeringBubble
+                content={item.content}
+                renderMessageImages={renderMessageImages}
+                t={t}
+              />
+            </div>
           ))}
           {visibleSubmissions.map(submission => (
             <PendingSubmissionBubble

@@ -255,9 +255,21 @@ export class PiAiAdapter extends LlmAdapter {
     const failure = profile.modelErrors.get(model)
       ?? (profile.piProvider === undefined ? profile.catalogError : undefined)
     if (failure !== undefined) throw new LlmError(failure, 'INVALID_CONFIG')
-    const resolved = snapshot.models.getModel(provider, model)
+    // Lookup order — exact wire id, then alias (retired ids / display names
+    // registered on the profile), then a live display-name hit. A settings
+    // rename must keep stored session/default references resolvable.
+    const canonical = profile.modelAliases.get(model) ?? model
+    const resolved = snapshot.models.getModel(provider, canonical)
+      ?? snapshot.models.getModel(provider, model)
+      ?? profile.serviceableModels.find(entry => entry.name === model)
+      ?? snapshot.models.getModels(provider).find(entry => entry.name === model)
     if (resolved === undefined) {
-      throw new LlmError(`pi-ai provider "${provider}" has no configured model "${model}"`, 'UNKNOWN_MODEL')
+      const available = profile.serviceableModels.map(entry => entry.id).join(', ')
+      throw new LlmError(
+        `pi-ai provider "${provider}" has no configured model "${model}"`
+        + (available.length === 0 ? '' : `; available: ${available}`),
+        'UNKNOWN_MODEL',
+      )
     }
     return resolved
   }
@@ -308,10 +320,13 @@ export class PiAiAdapter extends LlmAdapter {
     const defaultLevel = describableReasoningLevel(resolvedModel, profile.reasoning)
     // Only a cap the deployment configured is a request default; the
     // catalog's `maxTokens` sizes the model and stops there.
-    const configuredMaxTokens = profile.configuredMaxTokens.get(model)
+    // Keyed by the resolved id so a name-alias lookup still finds the cap.
+    const configuredMaxTokens = profile.configuredMaxTokens.get(resolvedModel.id)
     return {
       provider,
-      id: model,
+      // Resolved id, not the request string: a display-name hit must report
+      // (and a selectModel save must persist) the live wire id.
+      id: resolvedModel.id,
       name: resolvedModel.name,
       inputModalities: [...resolvedModel.input],
       context: { contextWindow: resolvedModel.contextWindow },

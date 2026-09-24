@@ -459,6 +459,9 @@ export function SessionNodeItem({
       )}
       role="treeitem"
       aria-selected={selected}
+      /* [本地改造 2026-09-24] 行上带会话身份：扩展 UI（删除入口）此前无法把一行对应回
+         具体会话，只能靠标题文本猜；选中态也据此可读出「当前打开的是哪段历史」。 */
+      data-session-id={node.id}
       onClick={() => { onOpen(node.id) }}
       onPointerEnter={() => { revealClippedTitle(titleRef.current, true) }}
       onPointerLeave={() => { revealClippedTitle(titleRef.current, false) }}

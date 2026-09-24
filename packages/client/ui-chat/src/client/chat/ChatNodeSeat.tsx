@@ -8,6 +8,21 @@ import { storedTurnProcessEntry } from '../stores.ts'
 import { useSearchableHidden } from './searchable-hidden.ts'
 import css from './ChatView.module.css'
 
+/**
+ * [本地改造 2026-09-24] 一行用户消息的日志位置。
+ *
+ * Chat 行只有引擎 key，扩展 UI（撤回入口、已撤回隐藏）无法据此寻址到具体那条
+ * `user/message` 事件；把 durable seq 一起写进 DOM，插件就能与服务端用同一个坐标
+ * 说话，而服务端撤回也正是按 seq 覆盖 surface 节点。非用户行返回 undefined，属性缺席。
+ * @param node - 当前行的 Chat Node。
+ * @returns 该行的日志 seq，或 undefined。
+ */
+function chatRowSeq(node: ChatNode | undefined): number | undefined {
+  if (node === undefined) return undefined
+  if (node.kind !== 'user' && node.kind !== 'steering') return undefined
+  return node.data.seq
+}
+
 interface ChatNodeSeatProps extends ChatNodeOwnerProps {
   readonly nodeKey: string
   readonly useChatNode: ChatViewSlotProps['useChatNode']
@@ -130,6 +145,7 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
       data-chat-anchor-key={routedNode.key}
       data-chat-flow-key={routedNode.key}
       data-chat-flow-kind={routedNode.kind}
+      data-message-seq={chatRowSeq(routedNode)}
       data-chat-turn={turn}
       data-turn-process-member={processMember || undefined}
       data-turn-process-hidden={processHidden || undefined}

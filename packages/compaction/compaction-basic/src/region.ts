@@ -23,6 +23,11 @@ import { SessionSeq, type Session, type SessionEvent } from '@deepseek-ai/dsh-se
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { frameSummary } from './summarizer.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
+export {
+  overflowSummarizationInputBudget,
+  summarizationInputBudget,
+  SUMMARIZATION_INPUT_SAFETY_RATIO,
+} from './summarization-budget.ts'
 
 interface RegionDependencies {
   readonly meter: TokenMeter
@@ -113,12 +118,16 @@ function systemHead(session: Session, headSeq: SessionSeq): SessionEvent<'system
  * @param session - session supplying authoritative current surface positions.
  * @param measurement - unified pressure and surface measurement from the conversation meter.
  * @param retainTokens - minimum recent tail budget retained verbatim.
+ * @param maxInputTokens - most tokens the summarization request may replay; a range whose
+ *   prefix price exceeds it is shortened at its head only while at least one node still
+ *   fits — a single unit above the budget cannot be repaired by shortening.
  * @returns the inclusive positional seq range to compact, or `null`.
  */
 export function selectCompactableRange(
   session: Session,
   measurement: TokenMeasurement,
   retainTokens: number,
+  maxInputTokens: number,
 ): { start: SessionSeq; end: SessionSeq } | null {
   const pricedNodes = measurement.nodes
   if (pricedNodes.length === 0) return null
@@ -148,11 +157,40 @@ export function selectCompactableRange(
   }
   if (keepFromIdx <= firstIdx) return null
 
+  const endIdx = boundedRangeEnd(pricedNodes, firstIdx, keepFromIdx - 1, maxInputTokens) ?? keepFromIdx - 1
   // oxlint-disable-next-line typescript/no-non-null-assertion
   const first = surfaceNodes[firstIdx]!
   // oxlint-disable-next-line typescript/no-non-null-assertion
-  const cutoff = surfaceNodes[keepFromIdx - 1]!
+  const cutoff = surfaceNodes[endIdx]!
   return { start: first, end: cutoff }
+}
+
+/**
+ * Bound one candidate range by the request budget: the replayed prefix keeps
+ * its start and drops its newest nodes until the price fits. A candidate whose
+ * first node alone exceeds the budget keeps its unshortened range, because no
+ * shortening can bring it under the budget.
+ * @param pricedNodes - request-priced surface nodes in positional order.
+ * @param firstIdx - first node the range may start at.
+ * @param endIdx - included last node of the candidate range.
+ * @param maxInputTokens - most tokens the summarization request may replay.
+ * @returns the inclusive end position to keep, or `null` when not even the first node fits.
+ */
+function boundedRangeEnd(
+  pricedNodes: TokenMeasurement['nodes'],
+  firstIdx: number,
+  endIdx: number,
+  maxInputTokens: number,
+): number | null {
+  let used = 0
+  let lastIdx: number | null = null
+  for (let index = firstIdx; index <= endIdx; index += 1) {
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    used += pricedNodes[index]!.tokens
+    if (used > maxInputTokens) break
+    lastIdx = index
+  }
+  return lastIdx
 }
 
 /**
