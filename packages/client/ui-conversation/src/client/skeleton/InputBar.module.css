@@ -293,14 +293,13 @@
 }
 
 .trailing {
-  flex: none;
-  /* Wrap keeps the left mode chips and the right controls apart when the card
-     runs out of row width: the trailing group (model + send) moves to its own
-     line instead of the left group shrinking until its chip overlaps the
-     model trigger (external:107). The auto margin re-anchors it right on the
-     wrapped line; on a single line space-between already pins it right. */
-  margin-left: auto;
-  gap: 12px;
+  /* [本地改造 2026-08-16] 输入条尾组（模型/余额/上下文）占满剩余宽度并右对齐、窄宽可换行：
+     原 flex:none + margin-left:auto 在竖屏会把三个控件挤成折叠重叠。官方注释里 external:107
+     描述的换行行为这里仍然成立，只是改为组内换行、间距收到 6px。 */
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 /* Compact spacing preserves room for the fixed-width controls in narrow cards. */

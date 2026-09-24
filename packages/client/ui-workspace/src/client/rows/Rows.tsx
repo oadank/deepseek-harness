@@ -569,6 +569,9 @@ export function SessionNodeItem({
     <div
       ref={rowRef}
       data-row-key={`session:${node.id}`}
+      // [本地改造 2026-09-24] 插件侧删除/选中态按裸会话 id 寻址（查 [data-session-id]），
+      // 官方 data-row-key 带 "session:" 前缀，插件取不到；两个属性并存。
+      data-session-id={node.id}
       className={clsx(
         css.sessionRow, selected && css.selected, menuOpen && css.menuOpen,
         row.archived && css.archived,

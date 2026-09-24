@@ -54,7 +54,14 @@ export class WelcomeNoticeStore {
    * @param scope - the welcome settings namespace scope; its memory mode is
    * what keeps a remote browser process-local.
    */
-  constructor(private readonly scope: ConfigForm<WelcomeSection>) {}
+  constructor(private readonly scope: ConfigForm<WelcomeSection>) {
+    // [本地改造 0.1.5] 远程浏览器（tailscale 等）scope 常为 memory → ack 不落盘，每次刷新都弹。
+    // localStorage 兜底持久化 ack 版本。
+    try {
+      const stored = globalThis.localStorage?.getItem('dsh.welcomeNoticeAck')
+      if (stored === WELCOME_NOTICE_VERSION) this.localAcknowledged = true
+    } catch { /* 隐私模式或无 localStorage：退回不持久化 */ }
+  }
 
   /**
    * Begin following the bound scope (idempotent) and publish its current answer.

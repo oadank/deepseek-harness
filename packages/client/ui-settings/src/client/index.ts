@@ -35,8 +35,9 @@ export const inject = ['remote', 'remote.settings']
  */
 export function apply(ctx: Context): void {
   const schema = new SettingsSchemaService(ctx)
-  // Every form uses the persistence mode resolved from the connected Host.
-  const persistence = ctx.remote.$host.isLoopback ? 'host' : 'memory'
+  // [本地改造 2026-09-11] 官方在非 loopback 连接上强制 memory（远程只读保护）。本机是内网
+  // 自用 + token 鉴权，放开远程 settings 读写，手机也要能管模型与提供方。
+  const persistence = 'host'
   const mirror = new SettingsDescribeMirror(ctx, persistence)
   ctx.effect(() => {
     const disposers = [
