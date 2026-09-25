@@ -24,6 +24,7 @@ import {
   OPEN_IN_APP_CATALOG, PATH_TOKEN,
   type OpenInAppApp, type OpenInAppLaunch, type OpenInAppLocator, type OpenInAppPlatformSpec,
 } from './catalog.ts'
+import { launchViaDesktopHelper } from './desktop-helper.ts'
 
 /** Where this host holds one resolved application's icon pixels. */
 export type OpenInAppIconSource =
@@ -686,6 +687,21 @@ function isMissingExecutable(error: unknown): boolean {
 function runShellOpen(
   path: string, watchMs: number, internals: ResolvedInternals,
 ): Promise<OpenInAppLaunchOutcome> {
+  // [本地改造 2026-09-24] nssm session 0 的 explorer 窗口用户看不见；默认
+  // opener 时先借 win-desktop-helper（session 1）ShellExecute。测试注入
+  // 自定义 run 时跳过 helper，保持可测。
+  if (internals.platform === 'win32' && internals.run === runNativeCommand) {
+    return launchViaDesktopHelper(path, []).then((outcome) => {
+      if (outcome === 'launched') return 'launched' as const
+      return runShellOpenLocal(path, watchMs, internals)
+    })
+  }
+  return runShellOpenLocal(path, watchMs, internals)
+}
+
+function runShellOpenLocal(
+  path: string, watchMs: number, internals: ResolvedInternals,
+): Promise<OpenInAppLaunchOutcome> {
   const opening = openNativePath(path, new AbortController().signal, {
     platform: internals.platform, run: internals.run, env: internals.env,
   })
@@ -716,7 +732,16 @@ async function runLaunch(
   switch (launch.kind) {
     case 'shell-open':
       return runShellOpen(path, watchMs, internals)
-    case 'argv':
+    case 'argv': {
+      // [本地改造 2026-09-24] session 0 spawn 的 GUI 窗口用户看不见；默认
+      // launcher 时先借 win-desktop-helper（session 1）。测试注入自定义
+      // launch 时跳过 helper，保持可测。
+      if (internals.platform === 'win32' && internals.launch === launchDetachedApp) {
+        const viaHelper = await launchViaDesktopHelper(launch.command, launchArgs(launch.args, path))
+        if (viaHelper === 'launched') return 'launched'
+        // Helper refused or is down: fall through to the local spawn so a
+        // headless or helper-less host still answers the route.
+      }
       try {
         await internals.launch(launch.command, launchArgs(launch.args, path), {
           watchMs,
@@ -731,6 +756,7 @@ async function runLaunch(
         // still try a fallback.
         return isMissingExecutable(error) ? 'missing' : 'failed'
       }
+    }
     /* v8 ignore next -- closed launch union */
     default: return assertNever(launch)
   }

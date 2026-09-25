@@ -26,7 +26,13 @@ const TURN_PROCESS_INDEPENDENT_KIND_LIST = [
   'turn-error',
   'turn-max-tokens',
   'turn-tail',
-] as const satisfies readonly ChatNode['kind'][]
+  // [本地改造 2026-09-24] 音视频/图片回复不参与工具折叠：send_video / send_image /
+  // 语音回复的产物若被收进 turn-process，点开前完全看不见。user 同类媒体条一并摘出。
+  'voice-reply',
+  'image-reply',
+  'video-reply',
+  'user-video',
+] as const satisfies readonly string[]
 
 /** Chat Node kinds that remain independent of a Turn's process disclosure. */
 export const TURN_PROCESS_INDEPENDENT_KINDS: ReadonlySet<string> = new Set(

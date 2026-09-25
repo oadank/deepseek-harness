@@ -10,7 +10,12 @@ import { hasAssistantReplyContent } from '../contract/assistant-content.ts'
 import { isVisibleChatNode } from '../contract/chat-visibility.ts'
 import { processActivity } from './process-activity.ts'
 
-const INDEPENDENT = new Set(['user', 'steering', 'turn-trigger', 'model-retry', 'turn-error', 'turn-max-tokens', 'turn-tail'])
+const INDEPENDENT = new Set([
+  'user', 'steering', 'turn-trigger', 'model-retry', 'turn-error', 'turn-max-tokens', 'turn-tail',
+  // [本地改造 2026-09-24] 音视频/图片回复必须独立成行，不能进工具折叠组——
+  // 否则 send_video/send_image 的产物被收进 turn-process，点开前看不见，展开后还挤在工具堆里。
+  'voice-reply', 'image-reply', 'video-reply', 'user-video',
+])
 type ProcessInput = ConversationGroupInput<ChatConversationViewNode>
 
 function turnOf(node: ChatNode): number | undefined {
