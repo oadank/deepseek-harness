@@ -2160,6 +2160,9 @@ importers:
       '@deepseek-ai/dsh-workflow-ptc':
         specifier: workspace:*
         version: link:../../workflow/workflow-ptc
+      '@oadank/dsh-pi-ai':
+        specifier: link:C:/Users/oadan/.dsh/profiles/node_modules/@oadank/dsh-pi-ai
+        version: link:../../../../../../../Users/oadan/.dsh/profiles/node_modules/@oadank/dsh-pi-ai
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~
@@ -2572,9 +2575,6 @@ importers:
       '@deepseek-ai/dsh-file-reference-local':
         specifier: workspace:*
         version: link:../../context/file-reference-local
-      '@deepseek-ai/dsh-host-balance':
-        specifier: workspace:*
-        version: link:../../host/balance
       '@deepseek-ai/dsh-host-directory-picker-auto':
         specifier: workspace:*
         version: link:../../host/directory-picker-auto
@@ -2584,9 +2584,6 @@ importers:
       '@deepseek-ai/dsh-host-directory-picker-native':
         specifier: workspace:*
         version: link:../../host/directory-picker-native
-      '@deepseek-ai/dsh-host-edge-tts':
-        specifier: workspace:*
-        version: link:../../host/edge-tts
       '@deepseek-ai/dsh-host-frontend-static':
         specifier: workspace:*
         version: link:../../host/frontend-static
@@ -8992,21 +8989,6 @@ importers:
         specifier: workspace:*
         version: link:../../core/tools
 
-  packages/host/balance:
-    devDependencies:
-      '@deepseek-ai/cordis':
-        specifier: workspace:~
-        version: link:../../../vendor/cordis
-      '@deepseek-ai/dsh-agent':
-        specifier: workspace:*
-        version: link:../../core/agent
-      '@deepseek-ai/dsh-credentials':
-        specifier: workspace:*
-        version: link:../../credentials/credentials
-      '@deepseek-ai/dsh-session':
-        specifier: workspace:*
-        version: link:../../core/session
-
   packages/host/directory-picker:
     devDependencies:
       '@deepseek-ai/cordis':
@@ -9078,25 +9060,6 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.22.4
-
-  packages/host/edge-tts:
-    dependencies:
-      ws:
-        specifier: ^8.21.0
-        version: 8.21.0
-    devDependencies:
-      '@deepseek-ai/cordis':
-        specifier: workspace:~
-        version: link:../../../vendor/cordis
-      '@deepseek-ai/dsh-agent':
-        specifier: workspace:*
-        version: link:../../core/agent
-      '@deepseek-ai/dsh-session':
-        specifier: workspace:*
-        version: link:../../core/session
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
 
   packages/host/frontend-static:
     dependencies:
