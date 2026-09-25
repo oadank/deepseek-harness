@@ -175,6 +175,7 @@ export function TextPreview({
     else if (mode === 'bytes-complete') reloadAll(tab.id, file, signal, observedVersion)
     else rendererReload()
   }, [canRead, mode, reloadPages, reloadAll, rendererReload, tab.id, file, signal, observedVersion])
+  useEffect(() => tab.actions.bindCommands({ refresh: reload }), [tab.actions, reload])
   useEffect(() => {
     if (state?.autoRefresh && changed && current !== undefined && !current.loading && meta.status === 'live') reload()
   }, [state?.autoRefresh, changed, current?.loading, meta.status, reload])
@@ -223,7 +224,7 @@ export function TextPreview({
       <div className={css.status} data-textpreview-state="loading">
         {meta.status === 'none'
           ? <p className={css.statusLine}>{t('resourceUnavailable')}</p>
-          : <LoadingIndicator className={css.statusLine} label={t('loading')} />}
+          : <LoadingIndicator label={t('loading')} />}
       </div>
     )
   }
@@ -312,17 +313,21 @@ export function TextPreview({
             </button>
           </Tooltip>
         </span>
-        <Tooltip label={t('reload')} side="bottom" delayMs={500}>
+        {/* Preview and file-tree refresh controls own different reload lifecycles and locale namespaces. */}
+        {/* jscpd:ignore-start */}
+        <Tooltip label={t('reload')} shortcutKeys={tab.refreshShortcut?.keys} side="bottom" delayMs={500}>
           <button
             type="button"
             className={css.tool}
             aria-label={t('reload')}
             data-textpreview-tool="reload"
+            aria-keyshortcuts={tab.refreshShortcut?.aria}
             onClick={reload}
           >
             <IconRefreshOutlineRegular />
           </button>
         </Tooltip>
+        {/* jscpd:ignore-end */}
         {fileOwner !== undefined && renderSlot('sidebar.right.tab.document.actions', fileOwner)}
       </div>
       <div
@@ -341,7 +346,7 @@ export function TextPreview({
         }}
       >
         {mode !== 'renderer' && !hasContent && current?.failure === undefined && (
-          <LoadingIndicator className={clsx(css.statusLine, css.bodyLoading)} label={t('loading')} />
+          <LoadingIndicator label={t('loading')} />
         )}
         {content !== undefined && renderSlot('sidebar.right.tab.document', {
           resourceAddress: tab.contentId, content, wrap: state.wrap, scrollportRef: bindScrollport,
@@ -396,7 +401,7 @@ export function TextPreview({
             data-textpreview-more
             onClick={loadNext}
           >
-            {current.loading ? <LoadingIndicator label={t('loading')} /> : t('loadMore')}
+            {current.loading ? <LoadingIndicator inline label={t('loading')} /> : t('loadMore')}
           </button>
         )}
       </div>
