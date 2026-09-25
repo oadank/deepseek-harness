@@ -56,11 +56,6 @@
     - id: session-log-download
       name: '@deepseek-ai/dsh-session-log-export'
 
-    # Free Microsoft Edge TTS as an authenticated Host synthesis route.
-    # [本地改造 2026-08-16 / 0.1.5 已迁移] 12s 收流超时 + 最多 3 次自动重试。
-    - id: edge-tts
-      name: '@deepseek-ai/dsh-host-edge-tts'
-
     # DeepSeek / GW / ARK balance indicators over GET /api/balance.
     # [本地改造 2026-08-16 / 0.1.5 已迁移] replaces apiproxy balance.get.
     - id: balance
