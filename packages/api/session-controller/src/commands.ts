@@ -766,3 +766,8 @@ function referencedImage(
   }
   return undefined
 }
+
+/** [本地改造] 该 provider 是否有 adapter 服务；prompt 前置校验用。 */
+function routeServed(ctx: Context, provider: string): boolean {
+  return ctx.llm.listProviders().some(entry => entry.id === provider)
+}
