@@ -124,12 +124,8 @@
     # Supplying those profiles is exactly what the web Models page does. Which
     # adapters exist is composition; which providers run is the user's settings
     # document.
-    # [本地改造 2026-09-27 案8/6 零改动化] 顶装：entry id 保持 "llm-pi-ai"（settingsNs
-    # 按 entry id 推导，settings.yaml 的 llm-pi-ai: 段零迁移），包换为 @oadank/dsh-pi-ai
-    # ——逐字节拷贝的源码+别名自愈/改名迁移/声明路由排序（esbuild 产物），经 pnpm link
-    # 挂在 packages/bundle/base/node_modules。官方 packages/llm/llm-pi-ai 已还原零改动。
     - id: llm-pi-ai
-      name: '@oadank/dsh-pi-ai'
+      name: '@deepseek-ai/dsh-llm-pi-ai'
 
     - id: session-persistence-jsonl
       name: '@deepseek-ai/dsh-session-persistence-jsonl'

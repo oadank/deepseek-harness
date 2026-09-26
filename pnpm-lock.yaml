@@ -2160,9 +2160,6 @@ importers:
       '@deepseek-ai/dsh-workflow-ptc':
         specifier: workspace:*
         version: link:../../workflow/workflow-ptc
-      '@oadank/dsh-pi-ai':
-        specifier: link:C:/Users/oadan/.dsh/profiles/node_modules/@oadank/dsh-pi-ai
-        version: link:../../../../../../../Users/oadan/.dsh/profiles/node_modules/@oadank/dsh-pi-ai
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~
