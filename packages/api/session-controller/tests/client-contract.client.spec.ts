@@ -76,8 +76,12 @@ describe('Client Session contracts', () => {
   it('keeps its text, image, and voice prompt parts identical to attachment intake', () => {
     // [本地改造 2026-09-11] session 契约加 voice 引用块后，与 admission intake 的
     // 对齐口径排除 file（voice 形状 = VoiceAdmissionRef，两侧结构一致）。
+    // [2026-10-02 0.2.0 合并期修正] 实际契约：voice 引用块只存在于 admission 侧
+    // （session wire 的 PromptContentPart 仅 text/image/file-receipt，voice 走
+    // 上传+admission 注入，不经本 wire 类型）；对齐口径 = 两侧排除 file 后，
+    // 再排除 admission 独有的 voice，剩余 text/image 必须逐字段一致。
     expectTypeOf<Exclude<SessionPromptContentPart, { type: 'file' }>>()
-      .toEqualTypeOf<Exclude<AttachmentAdmissionPart, { type: 'file' }>>()
+      .toEqualTypeOf<Exclude<Exclude<AttachmentAdmissionPart, { type: 'file' }>, { type: 'voice' }>>()
   })
 
   it('publishes exact replace, prepend, and append event-window changes', () => {
